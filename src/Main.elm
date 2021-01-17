@@ -226,6 +226,7 @@ viewEditor model =
             , position relative
             , focus [ backgroundColor (rgb 10 200 50) ]
             , overflowX auto
+            , outline none
             ]
           , preventDefaultOn "keydown" <| wrapKeyboardDecoder keyboardMsgDecoder
           , tabindex 0
