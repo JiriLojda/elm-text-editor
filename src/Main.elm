@@ -64,7 +64,7 @@ plainChar c = StyledChar c False False
 -- CONSTANTS
 
 
-lineHeightConst = 15
+lineHeightConst = 17
 lineWidthConst = 200
 fontSizeConst = 16
 paddingSize = 10
@@ -265,7 +265,6 @@ viewEditor model =
             [ whiteSpace noWrap
             , fontSize (px fontSizeConst)
             , maxWidth (px lineWidthConst)
-            , lineHeight (px lineHeightConst)
             , position relative
             , focus [ backgroundColor (rgb 10 200 50) ]
             , overflowX auto
@@ -294,7 +293,7 @@ viewEditorLineWithCaret maybeCaretPos num chars =
     in
     div
       [ id <| "line " ++ String.fromInt num
-      , css [ minHeight (px 15) ]
+      , css [ minHeight (px lineHeightConst), lineHeight (px <| lineHeightConst + 3) ]
       ]
       ( chars
           |> List.map viewChar
