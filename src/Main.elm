@@ -79,6 +79,7 @@ type Msg
       | TextChanged String
       | ClickChar Int
       | None
+      | DebugFail String
 
 type alias Model =
   { textValue : String
@@ -103,6 +104,7 @@ update msg model =
         ClickChar i -> ({ model | caretPosition = i }, Cmd.none)
         KeyboardMsgWrapper keyMsg -> (updateAfterKeyboardMsg keyMsg model, scrollToCaretIfNeeded)
         None -> (model, Cmd.none)
+        DebugFail error -> ({ model | textValue = error }, Cmd.none)
 
 updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
@@ -236,7 +238,7 @@ viewEditor model =
             |> Result.withDefault []
             |> List.map viewChar
             |> insertOnIndex model.caretPosition caretWrapper
-            |> List.indexedMap (\i v -> span [ onClick (ClickChar i), id (if i == model.caretPosition - 1 then "caretChar" else "") ] [v])
+            |> List.indexedMap (\i v -> span [ onClick (ClickChar i), id (if i == model.caretPosition - 1 || (i == 0 && model.caretPosition == 0) then "caretChar" else "") ] [v])
         )
     ]
 
