@@ -14,6 +14,7 @@ type KeyboardMsg
         | MoveCaretToTheEnd
         | RemovePrevChar
         | RemoveNextChar
+        | AddNewLine
 
 keyboardMsgDecoder : Json.Decoder KeyboardMsg
 keyboardMsgDecoder =
@@ -30,6 +31,7 @@ type Key
       | End
       | Backspace
       | Delete
+      | Enter
 
 type alias Modifiers =
             { ctrlPressed : Bool
@@ -56,6 +58,7 @@ keyDecoder =
             (_, "End") -> Json.succeed End
             (_, "Backspace") -> Json.succeed Backspace
             (_, "Delete") -> Json.succeed Delete
+            (_, "Enter") -> Json.succeed Enter
             (_, str) -> Json.fail <| "Not supported key: '" ++ str ++ "'. (at least for now)"
           )
 
@@ -80,5 +83,6 @@ keyMsgDecoder (key, modifiers) =
       (Home, (True, False, False)) -> Json.succeed MoveCaretToTheStart
       (Delete, (False, False, False)) -> Json.succeed RemoveNextChar
       (Backspace, (False, False, False)) -> Json.succeed RemovePrevChar
+      (Enter, (False, _, False)) -> Json.succeed AddNewLine
       _ -> Json.fail "Unsupported keyboard shortcut"
 

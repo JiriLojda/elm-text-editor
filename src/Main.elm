@@ -1,5 +1,6 @@
 module Main exposing (..)
 import Array exposing (Array)
+import Basics.Extra exposing (maxSafeInteger)
 import Browser
 import Browser.Dom as Dom exposing (Element)
 import Css exposing (..)
@@ -9,6 +10,7 @@ import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
 import Html.Styled.Attributes exposing (css, id, tabindex)
 import Json.Decode as Json
 import KeyboardMsg exposing (KeyboardMsg(..), keyboardMsgDecoder)
+import List.Extra as EList exposing (dropWhile, getAt, last, takeWhile)
 import Parser exposing ((|=), Parser)
 import String
 import Task as Task
@@ -16,7 +18,7 @@ import Task as Task
 main : Program () Model Msg
 main =
     Browser.element
-      { init = always ({ textValue = "empty", caretPosition = 0, highlighter = testParser }, Cmd.none)
+      { init = always ({ textValue = "empty", caretPosition = CaretPosition 0 0, highlighter = testParser }, Cmd.none)
       , update = update
       , view = view >> toUnstyled
       , subscriptions = subscriptions
@@ -77,14 +79,19 @@ caretWidth = 2
 type Msg
       = KeyboardMsgWrapper KeyboardMsg
       | TextChanged String
-      | ClickChar Int
+      | ClickChar Int Int
       | None
       | DebugFail String
 
 type alias Model =
   { textValue : String
-  , caretPosition : Int
+  , caretPosition : CaretPosition
   , highlighter : Parser (List StyledChar)
+  }
+
+type alias CaretPosition =
+  { column : Int
+  , line : Int
   }
 
 type alias StyledChar =
@@ -101,7 +108,7 @@ update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
     case msg of
         TextChanged text -> ({ model | textValue = text }, Cmd.none)
-        ClickChar i -> ({ model | caretPosition = i }, Cmd.none)
+        ClickChar column line -> ({ model | caretPosition = CaretPosition column line }, Cmd.none)
         KeyboardMsgWrapper keyMsg -> (updateAfterKeyboardMsg keyMsg model, scrollToCaretIfNeeded)
         None -> (model, Cmd.none)
         DebugFail error -> ({ model | textValue = error }, Cmd.none)
@@ -109,26 +116,60 @@ update msg model =
 updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
   case msg of
-    InsertChar c -> { model | textValue = insertCharAt model.caretPosition c model.textValue, caretPosition = model.caretPosition + 1 }
-    MoveCaretRight -> { model | caretPosition = updateCaretPos ((+) 1) model.textValue model.caretPosition }
-    MoveCaretLeft -> { model | caretPosition = updateCaretPos (\x -> x - 1) model.textValue model.caretPosition }
-    MoveCaretUp -> Debug.log "not implemented yet" model
-    MoveCaretDown -> Debug.log "not implemented yet" model
-    MoveCaretToLineEnd -> Debug.log "not implemented yet" model
-    MoveCaretToLineStart -> Debug.log "not implemented yet" model
-    MoveCaretToTheStart -> { model | caretPosition = 0 }
-    MoveCaretToTheEnd -> { model | caretPosition = String.length model.textValue }
-    RemoveNextChar -> { model | textValue = removeCharAt model.caretPosition model.textValue }
-    RemovePrevChar -> { model | textValue = removeCharAt (model.caretPosition - 1) model.textValue, caretPosition = updateCaretPos (\x -> x - 1) model.textValue model.caretPosition }
+    InsertChar c -> { model | textValue = insertCharAt (caretPosToIndex model.textValue model.caretPosition) c model.textValue, caretPosition = CaretPosition (model.caretPosition.column + 1) model.caretPosition.line }
+    MoveCaretRight -> { model | caretPosition = updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition }
+    MoveCaretLeft -> { model | caretPosition = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition }
+    MoveCaretUp -> { model | caretPosition = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line - 1) }
+    MoveCaretDown -> { model | caretPosition = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line + 1) }
+    MoveCaretToLineEnd -> { model | caretPosition = roundCaretPos model.textValue <| CaretPosition maxSafeInteger model.caretPosition.line }
+    MoveCaretToLineStart -> { model | caretPosition = CaretPosition 0 model.caretPosition.line }
+    MoveCaretToTheStart -> { model | caretPosition = CaretPosition 0 0 }
+    MoveCaretToTheEnd -> { model | caretPosition = let lines = String.lines model.textValue in CaretPosition (String.length <| Maybe.withDefault "" <| last lines) (List.length lines - 1)  }
+    RemoveNextChar -> { model | textValue = removeCharAt (caretPosToIndex model.textValue model.caretPosition) model.textValue }
+    RemovePrevChar -> { model | textValue = removeCharAt (caretPosToIndex model.textValue model.caretPosition - 1) model.textValue, caretPosition = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition }
+    AddNewLine -> { model | textValue = insertCharAt (caretPosToIndex model.textValue model.caretPosition) '\n' model.textValue, caretPosition = CaretPosition 0 (model.caretPosition.line + 1) }
 
-updateCaretPos : (Int -> Int) -> String -> Int -> Int
-updateCaretPos updater str oldPos =
+caretPosToIndex : String -> CaretPosition -> Int
+caretPosToIndex textValue caretPos =
+    let
+      lines = String.lines textValue
+      result =
+        lines
+          |> List.take caretPos.line
+          |> List.map String.length
+          |> List.map ((+) 1)
+          |> List.sum
+          |> ((+) caretPos.column)
+    in
+    max 0 <| min (String.length textValue) result
+
+indexToCaretPos : String -> Int -> CaretPosition
+indexToCaretPos textValue index =
+    let
+      relevantChars = List.take index <| String.toList textValue
+      newLinesCount = EList.count ((==) '\n') relevantChars
+      lastLine = if newLinesCount == 0 then relevantChars else EList.takeWhileRight ((/=) '\n') relevantChars
+    in
+    CaretPosition (List.length lastLine) newLinesCount
+
+updateCaretPosByIndexUpdate : (Int -> Int) -> String -> CaretPosition -> CaretPosition
+updateCaretPosByIndexUpdate updater str oldPos =
+  caretPosToIndex str oldPos
+    |> updater
+    |> min (String.length str)
+    |> max 0
+    |> indexToCaretPos str
+
+roundCaretPos : String -> CaretPosition -> CaretPosition
+roundCaretPos textValue caretPos =
   let
-    newPos = updater oldPos
+    lines = String.lines textValue
+    lineNum = max 0 <| min (List.length lines) caretPos.line
   in
-  if newPos > (String.length str) || newPos < 0
-   then oldPos
-   else newPos
+  case EList.getAt lineNum lines of
+    Nothing -> Debug.log "Failed to find selected line. :O " <| CaretPosition 0 0
+    Just line -> CaretPosition (max 0 <| min (String.length line) caretPos.column) lineNum
+
 
 removeCharAt : Int -> String -> String
 removeCharAt pos str =
@@ -148,7 +189,7 @@ shouldMoveRight el =
 
 findNewX : Element -> Float
 findNewX el =
-    if Debug.log "Should move left: " <| shouldMoveLeft el
+    if shouldMoveLeft el
       then el.element.x - viewportCaretPadding - viewportOverMoveToCaretMargin + caretWidth
       else el.element.x - el.viewport.width + viewportCaretPadding + viewportOverMoveToCaretMargin
 
@@ -158,7 +199,7 @@ shouldMove el =
 
 moveViewportIfNecessary : Element -> Task.Task Dom.Error ()
 moveViewportIfNecessary el =
-    if Debug.log "Should move: " <| shouldMove <| Debug.log "Viewport result: " el
+    if Debug.log "Should move: " <| shouldMove <| Debug.log "element: " el
       then Dom.setViewportOf "editor" (findNewX el) el.viewport.y
       else Task.succeed ()
 
@@ -178,7 +219,7 @@ createRelativeElement { element, viewport, viewportElement } =
 scrollToCaretIfNeeded : Cmd Msg
 scrollToCaretIfNeeded =
     Task.map3
-      (\element viewport editor -> createRelativeElement { element = element, viewport = viewport, viewportElement = editor })
+      (\element viewport editor -> createRelativeElement <| Debug.log "relative element inputs: " { element = element, viewport = viewport, viewportElement = editor })
       (Dom.getElement "caretChar")
       (Dom.getViewportOf "editor")
       (Dom.getElement "editor")
@@ -236,11 +277,40 @@ viewEditor model =
         ]
         ( Parser.run model.highlighter model.textValue
             |> Result.withDefault []
-            |> List.map viewChar
-            |> insertOnIndex model.caretPosition caretWrapper
-            |> List.indexedMap (\i v -> span [ onClick (ClickChar i), id (if i == model.caretPosition - 1 || (i == 0 && model.caretPosition == 0) then "caretChar" else "") ] [v])
+            |> splitBy isNewLine
+            |> List.indexedMap (\i v -> viewEditorLineWithCaret (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing) i v)
         )
     ]
+
+isNewLine : StyledChar -> Bool
+isNewLine char =
+    char.value == '\n'
+
+viewEditorLineWithCaret : Maybe Int -> Int -> List StyledChar -> Html Msg
+viewEditorLineWithCaret maybeCaretPos num chars =
+    let
+      hasCaret = maybeCaretPos /= Nothing
+      caretPos = Maybe.withDefault 0 maybeCaretPos
+    in
+    div
+      [ id <| "line " ++ String.fromInt num
+      , css [ minHeight (px 15) ]
+      ]
+      ( chars
+          |> List.map viewChar
+          |> insertOnMaybeIndex maybeCaretPos caretWrapper
+          |> List.indexedMap (\i v -> span [ onClick (ClickChar i num), id (if hasCaret && (i == caretPos - 1 || (i == 0 && caretPos == 0)) then "caretChar" else "") ] [v])
+      )
+
+splitBy : (a -> Bool) -> List a -> List (List a)
+splitBy isDivider list =
+    let
+      continue lst = (takeWhile (not << isDivider) lst) :: splitBy isDivider (dropWhile (not << isDivider) lst)
+    in
+    case EList.uncons list of
+      Nothing -> []
+      Just (first, []) -> if isDivider first then [[]] else [[first]]
+      Just (first, rest) -> if isDivider first then continue rest else continue list
 
 viewChar : StyledChar -> Html Msg
 viewChar char =
@@ -256,6 +326,12 @@ viewChar char =
 insertOnIndex : Int -> a -> List a -> List a
 insertOnIndex index element lst =
   List.take index lst ++ element :: List.drop index lst
+
+insertOnMaybeIndex : Maybe Int -> a -> List a -> List a
+insertOnMaybeIndex maybeIndex elem list =
+    case maybeIndex of
+      Nothing -> list
+      Just index -> insertOnIndex index elem list
 
 caretWrapper : Html Msg
 caretWrapper =
