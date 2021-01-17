@@ -2,3 +2,10 @@
 elm-stuff
 # elm-repl generated files
 repl-temp-*
+
+# Webstorm stuff
+.idea
+
+# generated stuff
+generated
+node_modules

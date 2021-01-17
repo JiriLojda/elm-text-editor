@@ -1,0 +1,36 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Main</title>
+  <style>body { padding: 0; margin: 0; }</style>
+  <script src="generated/elm.js"></script>
+</head>
+
+<body>
+
+<div id="elm"></div>
+
+<script>
+  const app = Elm.Main.init({
+    node: document.getElementById('elm'),
+  });
+
+  // app.ports.textClicked.subscribe(txt => {
+  //   console.log('textClicked called with: ', txt);
+  //   if (window.getSelection) {
+  //     const cursor = window.getSelection().getRangeAt(0).startOffset;
+  //     const result = txt[cursor];
+  //     console.log('found result: ', result, cursor);
+  //     app.ports.caretPositionChanged.send(cursor);
+  //
+  //   } else {
+  //     const range = document.selection.createRange();
+  //     range.expand('character');
+  //     app.ports.caretPositionChanged.send(range.startOffset);
+  //   }
+  // })
+</script>
+
+</body>
+</html>
