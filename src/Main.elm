@@ -295,11 +295,25 @@ viewEditorLineWithCaret maybeCaretPos num chars =
       [ id <| "line " ++ String.fromInt num
       , css [ minHeight (px lineHeightConst), lineHeight (px <| lineHeightConst + 3) ]
       ]
-      ( chars
-          |> List.map viewChar
-          |> insertOnMaybeIndex maybeCaretPos caretWrapper
-          |> List.indexedMap (\i v -> span [ onClick (ClickChar i num), id (if hasCaret && (i == caretPos - 1 || (i == 0 && caretPos == 0)) then "caretChar" else "") ] [v])
-      )
+      <| viewLineNumber num
+      ::  ( chars
+            |> List.map viewChar
+            |> insertOnMaybeIndex maybeCaretPos caretWrapper
+            |> List.indexedMap (\i v -> span [ onClick (ClickChar i num), id (if hasCaret && (i == caretPos - 1 || (i == 0 && caretPos == 0)) then "caretChar" else "") ] [v])
+          )
+
+viewLineNumber : Int -> Html Msg
+viewLineNumber num =
+    span
+      [ css [ height (pct 100)
+            , width (px 50)
+            , backgroundColor (rgb 0 0 200)
+            , color (rgb 250 250 250)
+            , marginRight (px 10)
+            ]
+      ]
+      [ text <| String.fromInt num
+      ]
 
 splitBy : (a -> Bool) -> List a -> List (List a)
 splitBy isDivider list =
