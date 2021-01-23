@@ -8,10 +8,18 @@ type KeyboardMsg
         | MoveCaretRight
         | MoveCaretUp
         | MoveCaretDown
+        | MoveCaretLeftWithSelection
+        | MoveCaretRightWithSelection
+        | MoveCaretUpWithSelection
+        | MoveCaretDownWithSelection
         | MoveCaretToLineEnd
         | MoveCaretToLineStart
         | MoveCaretToTheStart
         | MoveCaretToTheEnd
+        | MoveCaretToLineEndWithSelection
+        | MoveCaretToLineStartWithSelection
+        | MoveCaretToTheStartWithSelection
+        | MoveCaretToTheEndWithSelection
         | RemovePrevChar
         | RemoveNextChar
         | AddNewLine
@@ -77,10 +85,18 @@ keyMsgDecoder (key, modifiers) =
       (ArrowRight, (False, False, False)) -> Json.succeed MoveCaretRight
       (ArrowUp, (False, False, False)) -> Json.succeed MoveCaretUp
       (ArrowDown, (False, False, False)) -> Json.succeed MoveCaretDown
+      (ArrowLeft, (False, True, False)) -> Json.succeed MoveCaretLeftWithSelection
+      (ArrowRight, (False, True, False)) -> Json.succeed MoveCaretRightWithSelection
+      (ArrowUp, (False, True, False)) -> Json.succeed MoveCaretUpWithSelection
+      (ArrowDown, (False, True, False)) -> Json.succeed MoveCaretDownWithSelection
       (End, (False, False, False)) -> Json.succeed MoveCaretToLineEnd
       (End, (True, False, False)) -> Json.succeed MoveCaretToTheEnd
       (Home, (False, False, False)) -> Json.succeed MoveCaretToLineStart
       (Home, (True, False, False)) -> Json.succeed MoveCaretToTheStart
+      (End, (False, True, False)) -> Json.succeed MoveCaretToLineEndWithSelection
+      (End, (True, True, False)) -> Json.succeed MoveCaretToTheEndWithSelection
+      (Home, (False, True, False)) -> Json.succeed MoveCaretToLineStartWithSelection
+      (Home, (True, True, False)) -> Json.succeed MoveCaretToTheStartWithSelection
       (Delete, (False, False, False)) -> Json.succeed RemoveNextChar
       (Backspace, (False, False, False)) -> Json.succeed RemovePrevChar
       (Enter, (False, _, False)) -> Json.succeed AddNewLine

@@ -128,37 +128,89 @@ updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
   case msg of
     InsertChar c ->
+      let
+        charPos =
+          case model.selection of
+            Nothing -> model.caretPosition
+            Just sel -> firstPosition sel
+      in
       { model
-      | textValue = insertCharAt (caretPosToIndex model.textValue model.caretPosition) c model.textValue
-      , caretPosition = CaretPosition (model.caretPosition.column + 1) model.caretPosition.line
+      | textValue = insertCharAt (caretPosToIndex model.textValue charPos) c <| removeSelectedText model.selection model.textValue
+      , caretPosition = CaretPosition (charPos.column + 1) charPos.line
+      , selection = Nothing
       }
     MoveCaretRight ->
       { model
-      | caretPosition = updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition
+      | caretPosition =
+          case model.selection of
+            Nothing -> updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition
+            Just sel -> secondPosition sel
+      , selection = Nothing
+      }
+    MoveCaretRightWithSelection ->
+      let
+        newCaretPos = updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition
+      in
+      { model
+      | caretPosition = newCaretPos
+      , selection = updateSelectionAfterCaretMoveWithSelection model.caretPosition model.selection newCaretPos
       }
     MoveCaretLeft ->
       { model
-      | caretPosition = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
+      | caretPosition =
+          case model.selection of
+            Nothing -> updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
+            Just sel -> firstPosition sel
+      , selection = Nothing
+      }
+    MoveCaretLeftWithSelection ->
+      let
+        newCaretPos = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
+      in
+      { model
+      | caretPosition = newCaretPos
+      , selection = updateSelectionAfterCaretMoveWithSelection model.caretPosition model.selection newCaretPos
       }
     MoveCaretUp ->
       { model
       | caretPosition = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line - 1)
+      , selection = Nothing
+      }
+    MoveCaretUpWithSelection ->
+      let
+        newCaretPos = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line - 1)
+      in
+      { model
+      | caretPosition = newCaretPos
+      , selection = updateSelectionAfterCaretMoveWithSelection model.caretPosition model.selection newCaretPos
       }
     MoveCaretDown ->
       { model
       | caretPosition = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line + 1)
+      , selection = Nothing
+      }
+    MoveCaretDownWithSelection ->
+      let
+        newCaretPos = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line + 1)
+      in
+      { model
+      | caretPosition = newCaretPos
+      , selection = updateSelectionAfterCaretMoveWithSelection model.caretPosition model.selection newCaretPos
       }
     MoveCaretToLineEnd ->
       { model
       | caretPosition = roundCaretPos model.textValue <| CaretPosition maxSafeInteger model.caretPosition.line
+      , selection = Nothing
       }
     MoveCaretToLineStart ->
       { model
       | caretPosition = CaretPosition 0 model.caretPosition.line
+      , selection = Nothing
       }
     MoveCaretToTheStart ->
       { model
       | caretPosition = CaretPosition 0 0
+      , selection = Nothing
       }
     MoveCaretToTheEnd ->
       { model
@@ -167,20 +219,75 @@ updateAfterKeyboardMsg msg model =
             lines = String.lines model.textValue
           in
           CaretPosition (String.length <| Maybe.withDefault "" <| last lines) (List.length lines - 1)
+      , selection = Nothing
+      }
+    MoveCaretToLineEndWithSelection ->
+      let
+        newPos = roundCaretPos model.textValue <| CaretPosition maxSafeInteger model.caretPosition.line
+      in
+      { model
+      | caretPosition = newPos
+      , selection = Just <| extendSelectionTo newPos <| Maybe.withDefault (Selection model.caretPosition model.caretPosition) model.selection
+      }
+    MoveCaretToLineStartWithSelection ->
+      let
+        newPos = CaretPosition 0 model.caretPosition.line
+      in
+      { model
+      | caretPosition = newPos
+      , selection = Just <| extendSelectionTo newPos <| Maybe.withDefault (Selection model.caretPosition model.caretPosition) model.selection
+      }
+    MoveCaretToTheStartWithSelection ->
+      let
+        newPos = CaretPosition 0 0
+      in
+      { model
+      | caretPosition = newPos
+      , selection = Just <| extendSelectionTo newPos <| Maybe.withDefault (Selection model.caretPosition model.caretPosition) model.selection
+      }
+    MoveCaretToTheEndWithSelection ->
+      let
+       lines = String.lines model.textValue
+       newPos = CaretPosition (String.length <| Maybe.withDefault "" <| last lines) (List.length lines - 1)
+      in
+      { model
+      | caretPosition = newPos
+      , selection = Just <| extendSelectionTo newPos <| Maybe.withDefault (Selection model.caretPosition model.caretPosition) model.selection
       }
     RemoveNextChar ->
       { model
-      | textValue = removeCharAt (caretPosToIndex model.textValue model.caretPosition) model.textValue
+      | textValue =
+          case model.selection of
+            Nothing -> removeCharAt (caretPosToIndex model.textValue model.caretPosition) model.textValue
+            Just _ -> removeSelectedText model.selection model.textValue
+      , caretPosition =
+          case model.selection of
+            Nothing -> model.caretPosition
+            Just sel -> firstPosition sel
+      , selection = Nothing
       }
     RemovePrevChar ->
       { model
-      | textValue = removeCharAt (caretPosToIndex model.textValue model.caretPosition - 1) model.textValue
-      , caretPosition = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
+      | textValue =
+          case model.selection of
+            Nothing -> removeCharAt (caretPosToIndex model.textValue model.caretPosition - 1) model.textValue
+            Just _ -> removeSelectedText model.selection model.textValue
+      , caretPosition =
+          case model.selection of
+            Nothing -> updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
+            Just sel -> firstPosition sel
+      , selection = Nothing
       }
     AddNewLine ->
+      let
+        charPos =
+          case model.selection of
+            Nothing -> model.caretPosition
+            Just sel -> firstPosition sel
+      in
       { model
-      | textValue = insertCharAt (caretPosToIndex model.textValue model.caretPosition) '\n' model.textValue
-      , caretPosition = CaretPosition 0 (model.caretPosition.line + 1)
+      | textValue = insertCharAt (caretPosToIndex model.textValue charPos) '\n' <| removeSelectedText model.selection model.textValue
+      , caretPosition = CaretPosition 0 (charPos.line + 1)
       }
 
 caretPosToIndex : String -> CaretPosition -> Int
@@ -296,6 +403,36 @@ isPositionSelected maybeSelection { line, column } =
     (end.line > line && start.line < line) ||
     (not isOnelineSelection && end.line == line && end.column > column) ||
     (not isOnelineSelection && start.line == line && start.column <= column)
+
+updateSelectionAfterCaretMoveWithSelection : CaretPosition -> Maybe Selection -> CaretPosition -> Maybe Selection
+updateSelectionAfterCaretMoveWithSelection oldCaretPos oldSelection newCaretPos =
+    case oldSelection of
+      Nothing -> if oldCaretPos == newCaretPos then Nothing else Just { start = oldCaretPos, end = newCaretPos}
+      Just prev -> if prev.start == newCaretPos then Nothing else Just { start = prev.start, end = newCaretPos }
+
+removeSelectedText : Maybe Selection -> String -> String
+removeSelectedText selection text =
+    case selection of
+      Nothing -> text
+      Just sel ->
+        let
+          correctedSel = if isReversed sel then { start = sel.end, end = sel.start } else sel
+          startIndex = caretPosToIndex text correctedSel.start
+          endIndex = caretPosToIndex text correctedSel.end
+        in
+        String.left startIndex text ++ String.dropLeft endIndex text
+
+firstPosition : Selection -> CaretPosition
+firstPosition selection =
+    if isReversed selection then selection.end else selection.start
+
+secondPosition : Selection -> CaretPosition
+secondPosition selection =
+    if isReversed selection then selection.start else selection.end
+
+extendSelectionTo : CaretPosition -> Selection -> Selection
+extendSelectionTo pos selection =
+    { selection | end = pos }
 
 
 -- SUBSCRIPTIONS
