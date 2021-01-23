@@ -18,7 +18,12 @@ import Task as Task
 main : Program () Model Msg
 main =
     Browser.element
-      { init = always ({ textValue = "empty", caretPosition = CaretPosition 0 0, highlighter = testParser }, Cmd.none)
+      { init = always (
+                { textValue = "empty"
+                , caretPosition = CaretPosition 0 0
+                , selection = Nothing
+                , highlighter = testParser
+                }, Cmd.none)
       , update = update
       , view = view >> toUnstyled
       , subscriptions = subscriptions
@@ -87,6 +92,12 @@ type alias Model =
   { textValue : String
   , caretPosition : CaretPosition
   , highlighter : Parser (List StyledChar)
+  , selection : Maybe Selection
+  }
+
+type alias Selection =
+  { start : CaretPosition
+  , end : CaretPosition
   }
 
 type alias CaretPosition =
@@ -116,18 +127,61 @@ update msg model =
 updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
   case msg of
-    InsertChar c -> { model | textValue = insertCharAt (caretPosToIndex model.textValue model.caretPosition) c model.textValue, caretPosition = CaretPosition (model.caretPosition.column + 1) model.caretPosition.line }
-    MoveCaretRight -> { model | caretPosition = updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition }
-    MoveCaretLeft -> { model | caretPosition = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition }
-    MoveCaretUp -> { model | caretPosition = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line - 1) }
-    MoveCaretDown -> { model | caretPosition = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line + 1) }
-    MoveCaretToLineEnd -> { model | caretPosition = roundCaretPos model.textValue <| CaretPosition maxSafeInteger model.caretPosition.line }
-    MoveCaretToLineStart -> { model | caretPosition = CaretPosition 0 model.caretPosition.line }
-    MoveCaretToTheStart -> { model | caretPosition = CaretPosition 0 0 }
-    MoveCaretToTheEnd -> { model | caretPosition = let lines = String.lines model.textValue in CaretPosition (String.length <| Maybe.withDefault "" <| last lines) (List.length lines - 1)  }
-    RemoveNextChar -> { model | textValue = removeCharAt (caretPosToIndex model.textValue model.caretPosition) model.textValue }
-    RemovePrevChar -> { model | textValue = removeCharAt (caretPosToIndex model.textValue model.caretPosition - 1) model.textValue, caretPosition = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition }
-    AddNewLine -> { model | textValue = insertCharAt (caretPosToIndex model.textValue model.caretPosition) '\n' model.textValue, caretPosition = CaretPosition 0 (model.caretPosition.line + 1) }
+    InsertChar c ->
+      { model
+      | textValue = insertCharAt (caretPosToIndex model.textValue model.caretPosition) c model.textValue
+      , caretPosition = CaretPosition (model.caretPosition.column + 1) model.caretPosition.line
+      }
+    MoveCaretRight ->
+      { model
+      | caretPosition = updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition
+      }
+    MoveCaretLeft ->
+      { model
+      | caretPosition = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
+      }
+    MoveCaretUp ->
+      { model
+      | caretPosition = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line - 1)
+      }
+    MoveCaretDown ->
+      { model
+      | caretPosition = roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line + 1)
+      }
+    MoveCaretToLineEnd ->
+      { model
+      | caretPosition = roundCaretPos model.textValue <| CaretPosition maxSafeInteger model.caretPosition.line
+      }
+    MoveCaretToLineStart ->
+      { model
+      | caretPosition = CaretPosition 0 model.caretPosition.line
+      }
+    MoveCaretToTheStart ->
+      { model
+      | caretPosition = CaretPosition 0 0
+      }
+    MoveCaretToTheEnd ->
+      { model
+      | caretPosition =
+          let
+            lines = String.lines model.textValue
+          in
+          CaretPosition (String.length <| Maybe.withDefault "" <| last lines) (List.length lines - 1)
+      }
+    RemoveNextChar ->
+      { model
+      | textValue = removeCharAt (caretPosToIndex model.textValue model.caretPosition) model.textValue
+      }
+    RemovePrevChar ->
+      { model
+      | textValue = removeCharAt (caretPosToIndex model.textValue model.caretPosition - 1) model.textValue
+      , caretPosition = updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
+      }
+    AddNewLine ->
+      { model
+      | textValue = insertCharAt (caretPosToIndex model.textValue model.caretPosition) '\n' model.textValue
+      , caretPosition = CaretPosition 0 (model.caretPosition.line + 1)
+      }
 
 caretPosToIndex : String -> CaretPosition -> Int
 caretPosToIndex textValue caretPos =
@@ -199,7 +253,7 @@ shouldMove el =
 
 moveViewportIfNecessary : Element -> Task.Task Dom.Error ()
 moveViewportIfNecessary el =
-    if Debug.log "Should move: " <| shouldMove <| Debug.log "element: " el
+    if shouldMove el
       then Dom.setViewportOf "editor" (findNewX el) el.viewport.y
       else Task.succeed ()
 
@@ -219,12 +273,29 @@ createRelativeElement { element, viewport, viewportElement } =
 scrollToCaretIfNeeded : Cmd Msg
 scrollToCaretIfNeeded =
     Task.map3
-      (\element viewport editor -> createRelativeElement <| Debug.log "relative element inputs: " { element = element, viewport = viewport, viewportElement = editor })
+      (\element viewport editor -> createRelativeElement { element = element, viewport = viewport, viewportElement = editor })
       (Dom.getElement "caretChar")
       (Dom.getViewportOf "editor")
       (Dom.getElement "editor")
       |> Task.andThen moveViewportIfNecessary
       |> Task.attempt (always None)
+
+isReversed : Selection -> Bool
+isReversed selection =
+    selection.end.line < selection.start.line ||
+    (selection.end.line == selection.start.line && selection.end.column < selection.start.column)
+
+isPositionSelected : Maybe Selection -> CaretPosition -> Bool
+isPositionSelected maybeSelection { line, column } =
+    let
+      selection = Maybe.withDefault { start = CaretPosition 0 0, end = CaretPosition 0 0 } maybeSelection
+      { end, start } = if isReversed selection then { start = selection.end, end = selection.start } else selection
+      isOnelineSelection = end.line == start.line
+    in
+    (isOnelineSelection && line == end.line && end.column > column && start.column <= column) ||
+    (end.line > line && start.line < line) ||
+    (not isOnelineSelection && end.line == line && end.column > column) ||
+    (not isOnelineSelection && start.line == line && start.column <= column)
 
 
 -- SUBSCRIPTIONS
@@ -277,7 +348,7 @@ viewEditor model =
         ( Parser.run model.highlighter model.textValue
             |> Result.withDefault []
             |> splitBy isNewLine
-            |> List.indexedMap (\i v -> viewEditorLineWithCaret (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing) i v)
+            |> List.indexedMap (\i v -> viewEditorLineWithCaret model.selection (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing) i v)
         )
     ]
 
@@ -285,8 +356,8 @@ isNewLine : StyledChar -> Bool
 isNewLine char =
     char.value == '\n'
 
-viewEditorLineWithCaret : Maybe Int -> Int -> List StyledChar -> Html Msg
-viewEditorLineWithCaret maybeCaretPos num chars =
+viewEditorLineWithCaret : Maybe Selection -> Maybe Int -> Int -> List StyledChar -> Html Msg
+viewEditorLineWithCaret selection maybeCaretPos num chars =
     let
       hasCaret = maybeCaretPos /= Nothing
       caretPos = Maybe.withDefault 0 maybeCaretPos
@@ -297,6 +368,7 @@ viewEditorLineWithCaret maybeCaretPos num chars =
       ]
       <| viewLineNumber num
       ::  ( chars
+            |> List.indexedMap (\i v -> (v, isPositionSelected selection { column = i, line = num }))
             |> List.map viewChar
             |> insertOnMaybeIndex maybeCaretPos caretWrapper
             |> List.indexedMap (\i v -> span [ onClick (ClickChar i num), id (if hasCaret && (i == caretPos - 1 || (i == 0 && caretPos == 0)) then "caretChar" else "") ] [v])
@@ -325,16 +397,17 @@ splitBy isDivider list =
       Just (first, []) -> if isDivider first then [[]] else [[first]]
       Just (first, rest) -> if isDivider first then continue rest else continue list
 
-viewChar : StyledChar -> Html Msg
-viewChar char =
+viewChar : (StyledChar, Bool) -> Html Msg
+viewChar (char, isSelected) =
     let
       renderedChar = text <| String.fromChar char.value
+      charWithSelection = if isSelected then selected renderedChar else renderedChar
     in
     case (char.isKeyword, char.isErrored) of
-      (True, True) -> keyword <| errored renderedChar
-      (True, False) -> keyword renderedChar
-      (False, True) -> errored renderedChar
-      (False, False) -> renderedChar
+      (True, True) -> keyword <| errored charWithSelection
+      (True, False) -> keyword charWithSelection
+      (False, True) -> errored charWithSelection
+      (False, False) -> charWithSelection
 
 insertOnIndex : Int -> a -> List a -> List a
 insertOnIndex index element lst =
@@ -379,6 +452,11 @@ keyword word =
   span
     [ css [ color <| rgb 242 151 5, whiteSpace preLine ] ]
     [ word ]
+
+selected word =
+  span
+    [ css [ backgroundColor <| rgb 2 190 224 ] ]
+    [ span [ css [property "mix-blend-mode" "hue"] ][ word ] ]
 
 errored word =
   span
