@@ -5,12 +5,12 @@ import Browser
 import Browser.Dom as Dom exposing (Element)
 import Css exposing (..)
 import Css.Animations as Animation exposing (keyframes)
-import Html.Styled.Events exposing (onClick, onInput, preventDefaultOn)
+import Html.Styled.Events exposing (on, onClick, onInput, onMouseDown, onMouseEnter, onMouseOver, onMouseUp, preventDefaultOn, stopPropagationOn)
 import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
 import Html.Styled.Attributes exposing (css, id, tabindex)
 import Json.Decode as Json
 import KeyboardMsg exposing (KeyboardMsg(..), keyboardMsgDecoder)
-import List.Extra as EList exposing (dropWhile, getAt, last, takeWhile)
+import List.Extra as EList exposing (dropWhile, last, takeWhile)
 import Parser exposing ((|=), Parser)
 import String
 import Task as Task
@@ -20,6 +20,7 @@ main =
     Browser.element
       { init = always (
                 { textValue = "empty"
+                , isSelectionInProgress = False
                 , caretPosition = CaretPosition 0 0
                 , selection = Nothing
                 , highlighter = testParser
@@ -85,6 +86,9 @@ type Msg
       = KeyboardMsgWrapper KeyboardMsg
       | TextChanged String
       | ClickChar Int Int
+      | SelectionStarted Int Int
+      | SelectionProgressed Int Int
+      | SelectionFinished Int Int
       | None
       | DebugFail String
 
@@ -93,6 +97,7 @@ type alias Model =
   , caretPosition : CaretPosition
   , highlighter : Parser (List StyledChar)
   , selection : Maybe Selection
+  , isSelectionInProgress : Bool
   }
 
 type alias Selection =
@@ -119,10 +124,45 @@ update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
     case msg of
         TextChanged text -> ({ model | textValue = text }, Cmd.none)
-        ClickChar column line -> ({ model | caretPosition = CaretPosition column line }, Cmd.none)
+        ClickChar column line -> ({ model | caretPosition = CaretPosition column line, selection = Nothing }, Cmd.none)
         KeyboardMsgWrapper keyMsg -> (updateAfterKeyboardMsg keyMsg model, scrollToCaretIfNeeded)
         None -> (model, Cmd.none)
         DebugFail error -> ({ model | textValue = error }, Cmd.none)
+        SelectionStarted column line ->
+          let
+            position = CaretPosition column line
+          in
+          ({ model
+          | selection = Just { start = position, end = position }
+          , isSelectionInProgress = True
+          , caretPosition = position
+          }, Cmd.none
+          )
+        SelectionProgressed column line ->
+          let
+            position = CaretPosition column line
+          in
+          ({ model
+          | selection =
+              case model.selection of
+                Nothing -> Nothing
+                Just sel -> Just { sel | end = position }
+          , caretPosition = position
+          }, Cmd.none
+          )
+        SelectionFinished column line ->
+          let
+            position = CaretPosition column line
+          in
+          ({ model
+          | selection =
+              case model.selection of
+                Nothing -> Nothing
+                Just sel -> if sel.start == position then Nothing else Just { sel | end = position }
+          , isSelectionInProgress = False
+          , caretPosition = position
+          }, Cmd.none
+          )
 
 updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
@@ -467,14 +507,22 @@ wrapKeyboardDecoder = Json.map (\msg -> (KeyboardMsgWrapper msg, True))
 viewEditor : Model -> Html Msg
 viewEditor model =
   div
-    [ css [ padding (px paddingSize), overflow hidden, boxSizing borderBox ] ]
+    [ css
+      [ padding (px paddingSize)
+      , fontFamily monospace
+      , overflow hidden
+      , boxSizing borderBox
+      , property "user-select" "none"
+      , cursor text_
+      ]
+    ]
     [ div
         [ css
             [ whiteSpace noWrap
             , fontSize (px fontSizeConst)
             , maxWidth (px lineWidthConst)
             , position relative
-            , focus [ backgroundColor (rgb 10 200 50) ]
+            , focus [ backgroundColor (rgba 10 200 50 0.7) ]
             , overflowX auto
             , outline none
             ]
@@ -485,7 +533,7 @@ viewEditor model =
         ( Parser.run model.highlighter model.textValue
             |> Result.withDefault []
             |> splitBy isNewLine
-            |> List.indexedMap (\i v -> viewEditorLineWithCaret model.selection (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing) i v)
+            |> List.indexedMap (\i v -> viewEditorLineWithCaret model.isSelectionInProgress model.selection (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing) i v)
         )
     ]
 
@@ -493,23 +541,76 @@ isNewLine : StyledChar -> Bool
 isNewLine char =
     char.value == '\n'
 
-viewEditorLineWithCaret : Maybe Selection -> Maybe Int -> Int -> List StyledChar -> Html Msg
-viewEditorLineWithCaret selection maybeCaretPos num chars =
+viewEditorLineWithCaret : Bool -> Maybe Selection -> Maybe Int -> Int -> List StyledChar -> Html Msg
+viewEditorLineWithCaret isSelectionInProgress selection maybeCaretPos num chars =
     let
       hasCaret = maybeCaretPos /= Nothing
       caretPos = Maybe.withDefault 0 maybeCaretPos
+      lineEvents = if isSelectionInProgress
+        then
+          [ onMouseOver <| SelectionProgressed (List.length chars) num
+          , onMouseUp <| SelectionFinished (List.length chars) num
+          ]
+        else [ onMouseDown <| SelectionStarted (List.length chars) num ]
     in
     div
-      [ id <| "line " ++ String.fromInt num
+      ([ id <| "line " ++ String.fromInt num
       , css [ minHeight (px lineHeightConst), lineHeight (px <| lineHeightConst + 3) ]
-      ]
+      ] ++ lineEvents)
       <| viewLineNumber num
       ::  ( chars
             |> List.indexedMap (\i v -> (v, isPositionSelected selection { column = i, line = num }))
             |> List.map viewChar
+            |> List.indexedMap (\i v -> (createCharAttributes (hasCaret && (i == caretPos || (i == 0 && caretPos == 0))) isSelectionInProgress <| CaretPosition i num) <| v )
             |> insertOnMaybeIndex maybeCaretPos caretWrapper
-            |> List.indexedMap (\i v -> span [ onClick (ClickChar i num), id (if hasCaret && (i == caretPos - 1 || (i == 0 && caretPos == 0)) then "caretChar" else "") ] [v])
           )
+
+alwaysStopPropagation : String -> Msg -> Html.Styled.Attribute Msg
+alwaysStopPropagation event msg =
+  stopPropagationOn event (Json.succeed (msg, True))
+
+createCharAttributes : Bool -> Bool -> CaretPosition -> Html Msg -> Html Msg
+createCharAttributes hasCaret isSelectionInProgress charPos contents =
+    let
+      clickSelectionAttrs =
+        if isSelectionInProgress
+          then
+            [ alwaysStopPropagation "mouseup" (SelectionFinished (charPos.column) charPos.line)
+            , alwaysStopPropagation "mouseover" (SelectionProgressed (charPos.column) charPos.line)
+            ]
+          else [ alwaysStopPropagation "mousedown" (SelectionStarted charPos.column charPos.line) ]
+      separatorAttrs =
+        if not isSelectionInProgress
+          then []
+          else
+            [ alwaysStopPropagation "mouseenter" (SelectionProgressed (charPos.column) charPos.line)
+            , alwaysStopPropagation "mouseup" (SelectionFinished (charPos.column) charPos.line)
+            , alwaysStopPropagation "mousedown" (SelectionStarted charPos.column charPos.line)
+            ]
+    in
+    span
+      ([ onClick (ClickChar charPos.column charPos.line)
+      , id (if hasCaret then "caretChar" else "")
+      , css
+          [ height (pct 100)
+          , position relative
+          ]
+      ] ++ clickSelectionAttrs)
+      [ contents
+      , span
+          ([ id "pseudo-clicker"
+          , css
+              [ transform <| translateX (pct -250)
+              , backgroundColor transparent
+              , display inlineBlock
+              , position absolute
+              , width (pct 60)
+              , height (pct 100)
+              , zIndex (int 5)
+              ]
+          ] ++ separatorAttrs)
+          []
+      ]
 
 viewLineNumber : Int -> Html Msg
 viewLineNumber num =
