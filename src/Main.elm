@@ -5,7 +5,7 @@ import Browser
 import Browser.Dom as Dom exposing (Element)
 import Css exposing (..)
 import Css.Animations as Animation exposing (keyframes)
-import Html.Styled.Events exposing (on, onClick, onInput, onMouseDown, onMouseEnter, onMouseOver, onMouseUp, preventDefaultOn, stopPropagationOn)
+import Html.Styled.Events exposing (onClick, onInput, onMouseDown, onMouseOver, onMouseUp, preventDefaultOn, stopPropagationOn)
 import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
 import Html.Styled.Attributes exposing (css, id, tabindex)
 import Json.Decode as Json
@@ -24,6 +24,7 @@ main =
                 , caretPosition = CaretPosition 0 0
                 , selection = Nothing
                 , highlighter = testParser
+                , clipboard = ""
                 }, Cmd.none)
       , update = update
       , view = view >> toUnstyled
@@ -98,6 +99,7 @@ type alias Model =
   , highlighter : Parser (List StyledChar)
   , selection : Maybe Selection
   , isSelectionInProgress : Bool
+  , clipboard : String
   }
 
 type alias Selection =
@@ -329,6 +331,39 @@ updateAfterKeyboardMsg msg model =
       | textValue = insertCharAt (caretPosToIndex model.textValue charPos) '\n' <| removeSelectedText model.selection model.textValue
       , caretPosition = CaretPosition 0 (charPos.line + 1)
       }
+    Copy ->
+      let
+        selectedText = Maybe.map (getSelectedText model.textValue) model.selection
+        line = (Maybe.withDefault "" <| EList.getAt model.caretPosition.line (String.lines model.textValue)) ++ "\n"
+        toCopy =
+          case selectedText of
+            Nothing -> line
+            Just t -> if String.length t == 0 then line else t
+        isLineCopy = String.length (Maybe.withDefault "" selectedText) == 0
+      in
+      { model
+      | clipboard = toCopy
+      , selection =
+          if isLineCopy
+            then Just { start = CaretPosition 0 model.caretPosition.line, end = CaretPosition (String.length line) model.caretPosition.line }
+            else model.selection
+      , caretPosition =
+          if isLineCopy then CaretPosition 0 model.caretPosition.line else model.caretPosition
+      }
+    Paste ->
+      let
+        withoutSelection = removeSelectedText model.selection model.textValue
+        index =
+          case model.selection of
+            Nothing -> caretPosToIndex model.textValue model.caretPosition
+            Just sel -> caretPosToIndex model.textValue sel.start
+        finalText = String.slice 0 index withoutSelection ++ model.clipboard ++ String.slice index (String.length model.textValue) model.textValue
+      in
+      { model
+      | textValue = finalText
+      , caretPosition = indexToCaretPos finalText (index + String.length model.clipboard)
+      }
+
 
 caretPosToIndex : String -> CaretPosition -> Int
 caretPosToIndex textValue caretPos =
@@ -473,6 +508,15 @@ secondPosition selection =
 extendSelectionTo : CaretPosition -> Selection -> Selection
 extendSelectionTo pos selection =
     { selection | end = pos }
+
+getSelectedText : String -> Selection -> String
+getSelectedText text selection =
+    let
+      normalizedSelection = if isReversed selection then { start = selection.end, end = selection.start } else selection
+      startIndex = caretPosToIndex text normalizedSelection.start
+      endIndex = caretPosToIndex text normalizedSelection.end
+    in
+    String.slice startIndex endIndex text
 
 
 -- SUBSCRIPTIONS
