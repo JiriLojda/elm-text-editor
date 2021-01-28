@@ -17,6 +17,7 @@ import String
 import Task as Task
 import CaretPosition as Pos exposing (CaretPosition)
 import Selection as Sel exposing (Selection)
+import Undo exposing (UndoStack, applyChangeToUndoStack, undoLastBatch)
 
 main : Program () Model Msg
 main =
@@ -28,6 +29,7 @@ main =
                 , selection = Nothing
                 , highlighter = testParser
                 , clipboard = ""
+                , undoStack = []
                 }, Cmd.none)
       , update = update
       , view = view >> toUnstyled
@@ -103,6 +105,7 @@ type alias Model =
   , selection : Maybe Selection
   , isSelectionInProgress : Bool
   , clipboard : String
+  , undoStack : UndoStack
   }
 
 type alias StyledChar =
@@ -120,7 +123,7 @@ update msg model =
     case msg of
         TextChangedTestArea text -> ({ model | textValue = text }, Cmd.none)
         ClickChar column line ->
-          ( applyChange (CaretMoved { toPosition = CaretPosition column line, withSelection = False }) model
+          ( applyChangeWithUndo (CaretMoved { toPosition = CaretPosition column line, withSelection = False }) model
           , scrollToCaretIfNeeded
           )
         KeyboardMsgWrapper keyMsg -> (updateAfterKeyboardMsg keyMsg model, scrollToCaretIfNeeded)
@@ -129,44 +132,26 @@ update msg model =
         SelectionStarted column line ->
           let
             position = CaretPosition column line
+            updatedModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = False }) model
           in
-          ({ model
-          | selection = Just { start = position, end = position }
-          , isSelectionInProgress = True
-          , caretPosition = position
-          }, Cmd.none
-          )
+          ({ updatedModel | isSelectionInProgress = True }, Cmd.none)
         SelectionProgressed column line ->
           let
             position = CaretPosition column line
           in
-          ({ model
-          | selection =
-              case model.selection of
-                Nothing -> Nothing
-                Just sel -> Just { sel | end = position }
-          , caretPosition = position
-          }, scrollToCaretIfNeeded
-          )
+          (applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model, scrollToCaretIfNeeded)
         SelectionFinished column line ->
           let
             position = CaretPosition column line
+            updatedModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model
           in
-          ({ model
-          | selection =
-              case model.selection of
-                Nothing -> Nothing
-                Just sel -> if sel.start == position then Nothing else Just { sel | end = position }
-          , isSelectionInProgress = False
-          , caretPosition = position
-          }, Task.attempt (always None) <| Dom.focus "editor"
-          )
+          ({ updatedModel | isSelectionInProgress = False }, Task.attempt (always None) <| Dom.focus "editor")
 
 updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
   case msg of
     InsertChar c ->
-      applyChange (TextInserted { toInsert = String.fromChar c }) model
+      applyChangeWithUndo (TextInserted { toInsert = String.fromChar c }) model
     MoveCaretRight ->
       let
         newPos =
@@ -174,12 +159,12 @@ updateAfterKeyboardMsg msg model =
                       Nothing -> Pos.updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition
                       Just sel -> Sel.secondPosition sel
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = False }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = False }) model
     MoveCaretRightWithSelection ->
       let
         newPos = Pos.updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = True }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = True }) model
     MoveCaretLeft ->
       let
         newPos =
@@ -187,74 +172,74 @@ updateAfterKeyboardMsg msg model =
                       Nothing -> Pos.updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
                       Just sel -> Sel.firstPosition sel
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = False }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = False }) model
     MoveCaretLeftWithSelection ->
       let
         newPos = Pos.updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = True }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = True }) model
     MoveCaretUp ->
       let
         newPos = Pos.roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line - 1)
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = False }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = False }) model
     MoveCaretUpWithSelection ->
       let
         newPos = Pos.roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line - 1)
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = True }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = True }) model
     MoveCaretDown ->
       let
         newPos = Pos.roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line + 1)
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = False }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = False }) model
     MoveCaretDownWithSelection ->
       let
         newPos = Pos.roundCaretPos model.textValue <| CaretPosition model.caretPosition.column (model.caretPosition.line + 1)
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = True }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = True }) model
     MoveCaretToLineEnd ->
       let
         newPos = Pos.roundCaretPos model.textValue <| CaretPosition maxSafeInteger model.caretPosition.line
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = False }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = False }) model
     MoveCaretToLineStart ->
-      applyChange (CaretMoved { toPosition = CaretPosition 0 model.caretPosition.line, withSelection = False }) model
+      applyChangeWithUndo (CaretMoved { toPosition = CaretPosition 0 model.caretPosition.line, withSelection = False }) model
     MoveCaretToTheStart ->
-      applyChange (CaretMoved { toPosition = CaretPosition 0 0, withSelection = False }) model
+      applyChangeWithUndo (CaretMoved { toPosition = CaretPosition 0 0, withSelection = False }) model
     MoveCaretToTheEnd ->
       let
         lines = String.lines model.textValue
         newPos = CaretPosition (String.length <| Maybe.withDefault "" <| last lines) (List.length lines - 1)
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = False }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = False }) model
     MoveCaretToLineEndWithSelection ->
       let
         newPos = Pos.roundCaretPos model.textValue <| CaretPosition maxSafeInteger model.caretPosition.line
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = True }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = True }) model
     MoveCaretToLineStartWithSelection ->
       let
         newPos = CaretPosition 0 model.caretPosition.line
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = True }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = True }) model
     MoveCaretToTheStartWithSelection ->
       let
         newPos = CaretPosition 0 0
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = True }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = True }) model
     MoveCaretToTheEndWithSelection ->
       let
        lines = String.lines model.textValue
        newPos = CaretPosition (String.length <| Maybe.withDefault "" <| last lines) (List.length lines - 1)
       in
-      applyChange (CaretMoved { toPosition = newPos, withSelection = True }) model
+      applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = True }) model
     RemoveNextChar ->
-      applyChange (CharRemoved { index = Pos.caretPosToIndex model.textValue model.caretPosition }) model
+      applyChangeWithUndo (CharRemoved { index = Pos.caretPosToIndex model.textValue model.caretPosition }) model
     RemovePrevChar ->
-      applyChange (CharRemoved { index = Pos.caretPosToIndex model.textValue model.caretPosition - 1 }) model
+      applyChangeWithUndo (CharRemoved { index = Pos.caretPosToIndex model.textValue model.caretPosition - 1 }) model
     AddNewLine ->
-      applyChange (TextInserted { toInsert = "\n" }) model
+      applyChangeWithUndo (TextInserted { toInsert = "\n" }) model
     Copy ->
       let
         selectedText = Maybe.map (Sel.getSelectedText model.textValue) model.selection
@@ -265,9 +250,17 @@ updateAfterKeyboardMsg msg model =
             Just t -> if String.length t == 0 then line else t
         isLineCopy = String.length (Maybe.withDefault "" selectedText) == 0
       in
-      applyChange (ClipboardChanged { newClipboard = toCopy, isLineCopy = isLineCopy }) model
+      applyChangeWithUndo (ClipboardChanged { newClipboard = toCopy, isLineCopy = isLineCopy }) model
     Paste ->
-      applyChange (TextInserted { toInsert = model.clipboard }) model
+      applyChangeWithUndo (TextInserted { toInsert = model.clipboard }) model
+    Undo ->
+      undoLastBatch model
+
+applyChangeWithUndo : Change -> Model -> Model
+applyChangeWithUndo change model =
+    model
+      |> applyChangeToUndoStack change
+      |> applyChange change
 
 shouldMoveLeft : Element -> Bool
 shouldMoveLeft el =
