@@ -43,7 +43,7 @@ roundCaretPos : String -> CaretPosition -> CaretPosition
 roundCaretPos textValue caretPos =
   let
     lines = String.lines textValue
-    lineNum = max 0 <| min (List.length lines) caretPos.line
+    lineNum = max 0 <| min (List.length lines - 1) caretPos.line
   in
   case EList.getAt lineNum lines of
     Nothing -> Debug.log "Failed to find selected line. :O " <| CaretPosition 0 0
