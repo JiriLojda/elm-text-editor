@@ -3,14 +3,17 @@
   "version": "1.0.0",
   "description": "Just trying something out",
   "main": "index.html",
+  "directories": {
+    "test": "tests"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "elm-test --fuzz 1000",
     "watch": "chokidar \"**/*.elm\" \"index.html\" -c \"elm make src/Main.elm --output=generated/elm.js\" --initial",
     "watch-dev": "chokidar \"**/*.elm\" \"index.html\" -c \"elm make src/Main.elm --output=generated/elm.js --debug\" --initial",
     "make": "elm make src/Main.elm --output=generated/elm.js",
     "make-dev": "elm make src/Main.elm --output=generated/elm.js --debug"
   },
-  "author": "Jiri Lojda + Juli",
+  "author": "Jiri Lojda",
   "license": "ISC",
   "devDependencies": {
     "chokidar-cli": "^2.1.0",
