@@ -168,10 +168,11 @@ applyChangeToUndoStack change model =
                 Pos.caretPosToIndex model.textValue (Sel.firstPosition sel)
           adding = TextAdded { index = index, text = data.toInsert }
           hasMoreThanOneChar = String.length data.toInsert > 1
+          isNewLineChar = data.toInsert == "\n"
           shouldCreateNewBatch =
             case lastChange of
-              Nothing -> hasMoreThanOneChar
-              Just (TextAdded _) -> hasMoreThanOneChar
+              Nothing -> hasMoreThanOneChar || isNewLineChar
+              Just (TextAdded { text }) -> hasMoreThanOneChar || isNewLineChar || text == "\n"
               _ -> True
         in
         { model
