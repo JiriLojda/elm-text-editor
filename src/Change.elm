@@ -28,7 +28,7 @@ type Change
   | CharRemoved CharRemovedData
   | CaretMoved MoveCaretData
 
-type alias EditorInfo model =
+type alias ChangeableEditorInfo model =
   { model
   | textValue : String
   , caretPosition : CaretPosition
@@ -36,7 +36,7 @@ type alias EditorInfo model =
   , clipboard : String
   }
 
-applyChange : Change -> EditorInfo model  -> EditorInfo model
+applyChange : Change -> ChangeableEditorInfo model  -> ChangeableEditorInfo model
 applyChange change model =
     case change of
       ClipboardChanged data ->

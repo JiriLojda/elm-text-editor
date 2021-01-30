@@ -17,7 +17,7 @@ import String
 import Task as Task
 import CaretPosition as Pos exposing (CaretPosition)
 import Selection as Sel exposing (Selection)
-import Undo exposing (UndoStack, applyChangeToUndoStack, undoLastBatch)
+import Undo exposing (RedoStack, UndoStack, applyChangeToUndoStack, redoLastBatch, undoLastBatch)
 
 main : Program () Model Msg
 main =
@@ -30,6 +30,7 @@ main =
                 , highlighter = testParser
                 , clipboard = ""
                 , undoStack = []
+                , redoStack = []
                 }, Cmd.none)
       , update = update
       , view = view >> toUnstyled
@@ -106,6 +107,7 @@ type alias Model =
   , isSelectionInProgress : Bool
   , clipboard : String
   , undoStack : UndoStack
+  , redoStack : RedoStack
   }
 
 type alias StyledChar =
@@ -255,6 +257,8 @@ updateAfterKeyboardMsg msg model =
       applyChangeWithUndo (TextInserted { toInsert = model.clipboard }) model
     Undo ->
       undoLastBatch model
+    Redo ->
+      redoLastBatch model
 
 applyChangeWithUndo : Change -> Model -> Model
 applyChangeWithUndo change model =

@@ -1,4 +1,4 @@
-module Undo exposing (UndoStack, applyChangeToUndoStack, undoLastBatch)
+module Undo exposing (UndoStack, applyChangeToUndoStack, undoLastBatch, redoLastBatch, RedoStack)
 
 import CaretPosition as Pos exposing (CaretPosition)
 import Change as Change exposing (Change)
@@ -65,22 +65,70 @@ undoChange change model =
 
 type alias UndoableBatch = List UndoableChange
 type alias UndoStack = List UndoableBatch
+type alias RedoStack = UndoStack
 
-type alias WithUndoStack model =
+type alias WithUndoRedoStacks model =
   { model
   | undoStack : UndoStack
+  , redoStack : RedoStack
   }
 
-undoLastBatch : WithUndoStack (UndoableEditorInfo model) -> WithUndoStack (UndoableEditorInfo model)
+undoLastBatch : WithUndoRedoStacks (UndoableEditorInfo model) -> WithUndoRedoStacks (UndoableEditorInfo model)
 undoLastBatch model =
     let
       updatedModel = List.foldl undoChange model <| Maybe.withDefault [] (List.head model.undoStack)
     in
     { updatedModel
     | undoStack = List.drop 1 model.undoStack
+    , redoStack =
+        case List.head model.undoStack of
+          Nothing ->
+            model.redoStack
+          Just batch ->
+            (List.reverse batch) :: model.redoStack
     }
 
-applyChangeToUndoStack : Change -> WithUndoStack (UndoableEditorInfo model) -> WithUndoStack (UndoableEditorInfo model)
+redoLastBatch : WithUndoRedoStacks (UndoableEditorInfo model) -> WithUndoRedoStacks (UndoableEditorInfo model)
+redoLastBatch model =
+    let
+      updatedModel = List.foldl redoChange model <| Maybe.withDefault [] (List.head model.redoStack)
+    in
+    { updatedModel
+    | redoStack = List.drop 1 model.redoStack
+    , undoStack =
+        case List.head model.redoStack of
+          Nothing ->
+            model.undoStack
+          Just batch ->
+            (List.reverse batch) :: model.undoStack
+    }
+
+redoChange : UndoableChange -> UndoableEditorInfo model -> UndoableEditorInfo model
+redoChange change model =
+    case change of
+      TextAdded data ->
+        let
+          newText = insertAt data.index data.text model.textValue
+        in
+        { model
+        | textValue = newText
+        , caretPosition = Pos.indexToCaretPos newText (data.index + String.length data.text)
+        , selection = Nothing
+        }
+      TextRemoved data ->
+        { model
+        | textValue = removeAt data.startingIndex (String.length data.text) model.textValue
+        , caretPosition = data.originalCaretPosition
+        , selection = Nothing
+        }
+      CaretMoved data ->
+        { model
+        | caretPosition = data.to
+        , selection = Nothing
+        }
+
+
+applyChangeToUndoStack : Change -> WithUndoRedoStacks (UndoableEditorInfo model) -> WithUndoRedoStacks (UndoableEditorInfo model)
 applyChangeToUndoStack change model =
     let
       lastBatch = Maybe.withDefault [] <| List.head model.undoStack
@@ -131,6 +179,7 @@ applyChangeToUndoStack change model =
             if shouldCreateNewBatch
               then (adding :: selectionRemoval) :: model.undoStack
               else appendBatchToLatestBatch (adding :: selectionRemoval) model.undoStack
+        , redoStack = []
         }
       Change.CharRemoved data ->
         let
@@ -156,6 +205,7 @@ applyChangeToUndoStack change model =
             if shouldCreateNewBatch
               then [removalChange] :: model.undoStack
               else appendToLatestBatch removalChange model.undoStack
+        , redoStack = []
         }
       Change.ClipboardChanged _ ->
         model

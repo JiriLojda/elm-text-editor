@@ -26,6 +26,7 @@ type KeyboardMsg
         | Copy
         | Paste
         | Undo
+        | Redo
 
 keyboardMsgDecoder : Json.Decoder KeyboardMsg
 keyboardMsgDecoder =
@@ -106,5 +107,6 @@ keyMsgDecoder (key, modifiers) =
       (CharKey 'c', (True, _, False)) -> Json.succeed Copy
       (CharKey 'v', (True, _, False)) -> Json.succeed Paste
       (CharKey 'z', (True, _, False)) -> Json.succeed Undo
+      (CharKey 'y', (True, _, False)) -> Json.succeed Redo
       _ -> Json.fail "Unsupported keyboard shortcut"
 
