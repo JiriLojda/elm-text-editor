@@ -1,8 +1,8 @@
-module CaretPositionTests exposing (suite)
+module CaretPositionTests exposing (suite, caretPosFuzzer)
 
 import CaretPosition as Pos exposing (CaretPosition)
 import Expect exposing (Expectation)
-import Fuzz exposing (Fuzzer, int, list, string)
+import Fuzz exposing (Fuzzer, string)
 import Random exposing (Generator)
 import Shrink exposing (noShrink)
 import Test exposing (..)
