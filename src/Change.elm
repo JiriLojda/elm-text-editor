@@ -1,6 +1,7 @@
 module Change exposing (applyChange, Change(..), MoveCaretData, CharRemovedData, TextInsertedData, ClipboardChangedData)
 
 
+import List.Extra as EList
 import Selection as Sel exposing (Selection)
 import CaretPosition as Pos exposing (CaretPosition)
 
@@ -40,12 +41,20 @@ applyChange : Change -> ChangeableEditorInfo model  -> ChangeableEditorInfo mode
 applyChange change model =
     case change of
       ClipboardChanged data ->
+        let
+          line = String.lines model.textValue |> EList.getAt model.caretPosition.line
+          lineLength = String.length <| Maybe.withDefault "" line
+        in
         { model
-        | clipboard = data.newClipboard
+        | clipboard =
+            data.newClipboard
         , selection =
-                  if data.isLineCopy
-                    then Just { start = CaretPosition 0 model.caretPosition.line, end = CaretPosition (String.length data.newClipboard) model.caretPosition.line }
-                    else model.selection
+            if data.isLineCopy
+              then Just
+                { start = CaretPosition lineLength model.caretPosition.line
+                , end = CaretPosition 0 model.caretPosition.line
+                }
+              else model.selection
         , caretPosition =
             if data.isLineCopy then CaretPosition 0 model.caretPosition.line else model.caretPosition
         }
