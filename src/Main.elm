@@ -6,9 +6,12 @@ import Browser.Dom as Dom exposing (Element)
 import Change exposing (Change(..), applyChange)
 import Css exposing (..)
 import Css.Animations as Animation exposing (keyframes)
+import Css.Global as Global exposing (global)
 import Html.Styled.Events exposing (onClick, onInput, onMouseDown, onMouseOver, onMouseUp, preventDefaultOn, stopPropagationOn)
 import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
-import Html.Styled.Attributes exposing (css, id, tabindex)
+import Html.Styled.Keyed as Keyed
+import Html.Styled.Lazy as Lazy
+import Html.Styled.Attributes exposing (class, css, id, tabindex)
 import Json.Decode as Json
 import KeyboardMsg exposing (KeyboardMsg(..), keyboardMsgDecoder)
 import List.Extra as EList exposing (dropWhile, last, takeWhile)
@@ -333,6 +336,7 @@ view : Model -> Html Msg
 view model =
     div []
         [ br [] []
+        , viewPredefinedStyles
         , viewTestArea model
         , viewEditor model
         ]
@@ -347,6 +351,38 @@ viewTestArea model =
 
 wrapKeyboardDecoder : Json.Decoder KeyboardMsg -> Json.Decoder (Msg, Bool)
 wrapKeyboardDecoder = Json.map (\msg -> (KeyboardMsgWrapper msg, True))
+
+viewPredefinedStyles : Html Msg
+viewPredefinedStyles =
+    global
+      [ Global.class "line"
+        [ minHeight (px lineHeightConst)
+        , lineHeight (px <| lineHeightConst + 3)
+        , displayFlex
+        , whiteSpace pre
+        ]
+      , Global.class "char-inner"
+        [ transform <| translateX (pct -250)
+        , backgroundColor transparent
+        , display inlineBlock
+        , position absolute
+        , width (pct 60)
+        , height (pct 100)
+        , zIndex (int 5)
+        ]
+      , Global.class "char-outer"
+        [ height (pct 100)
+        , position relative
+        ]
+      , Global.class "line-number"
+        [ height (pct 100)
+        , width (px 50)
+        , backgroundColor (rgb 0 0 200)
+        , color (rgb 250 250 250)
+        , marginRight (px 10)
+        , flexBasis (px 0)
+        ]
+      ]
 
 viewEditor : Model -> Html Msg
 viewEditor model =
@@ -382,7 +418,7 @@ viewEditor model =
         ]
         <| List.indexedMap
             (\i v ->
-              viewEditorLineWithCaret
+              Lazy.lazy viewEditorLineWithCaret
                 { isSelectionInProgress = model.isSelectionInProgress
                 , selection = model.selection
                 , caretPositionOnLine = if i == model.caretPosition.line then Just model.caretPosition.column else Nothing
@@ -424,12 +460,7 @@ viewEditorLineWithCaret { isSelectionInProgress, selection, caretPositionOnLine,
     div
       (
       [ id <| "line " ++ String.fromInt lineNumber
-      , css
-        [ minHeight (px lineHeightConst)
-        , lineHeight (px <| lineHeightConst + 3)
-        , displayFlex
-        , whiteSpace pre
-        ]
+      , class "line"
       ] ++ lineEvents
       )
       <| viewLineNumber lineNumber
@@ -438,9 +469,9 @@ viewEditorLineWithCaret { isSelectionInProgress, selection, caretPositionOnLine,
             |> List.map viewChar
             |> List.indexedMap (\i v -> createCharAttributes isSelectionInProgress (CaretPosition i lineNumber) v )
             |> insertOnMaybeIndex caretPositionOnLine caretWrapper
-            |> if isNewLineSelected
+            |> (if isNewLineSelected
                 then flip List.append [selectedNewLine]
-                else identity
+                else identity)
           )
 
 alwaysStopPropagation : String -> Msg -> Html.Styled.Attribute Msg
@@ -468,23 +499,12 @@ createCharAttributes isSelectionInProgress charPos contents =
     in
     span
       ([ onClick (ClickChar charPos.column charPos.line)
-      , css
-          [ height (pct 100)
-          , position relative
-          ]
+      , class "char-outer"
       ] ++ clickSelectionAttrs)
       [ contents
       , span
           ([ id "pseudo-clicker"
-          , css
-              [ transform <| translateX (pct -250)
-              , backgroundColor transparent
-              , display inlineBlock
-              , position absolute
-              , width (pct 60)
-              , height (pct 100)
-              , zIndex (int 5)
-              ]
+          , class "char-inner"
           ] ++ separatorAttrs)
           []
       ]
@@ -492,14 +512,7 @@ createCharAttributes isSelectionInProgress charPos contents =
 viewLineNumber : Int -> Html Msg
 viewLineNumber num =
     span
-      [ css
-        [ height (pct 100)
-        , width (px 50)
-        , backgroundColor (rgb 0 0 200)
-        , color (rgb 250 250 250)
-        , marginRight (px 10)
-        , flexBasis (px 0)
-        ]
+      [ class "line-number"
       ]
       [ text <| String.fromInt num
       ]

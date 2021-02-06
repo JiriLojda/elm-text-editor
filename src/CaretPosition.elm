@@ -46,6 +46,7 @@ roundCaretPos textValue caretPos =
     lineNum = max 0 <| min (List.length lines - 1) caretPos.line
   in
   case EList.getAt lineNum lines of
-    Nothing -> Debug.log "Failed to find selected line. :O " <| CaretPosition 0 0
+    --Nothing -> Debug.log "Failed to find selected line. :O " <| CaretPosition 0 0
+    Nothing -> CaretPosition 0 0
     Just line -> CaretPosition (max 0 <| min (String.length line) caretPos.column) lineNum
 
