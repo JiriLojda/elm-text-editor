@@ -34,6 +34,7 @@ main =
                 , clipboard = ""
                 , undoStack = []
                 , redoStack = []
+                , parsedText = [Result.withDefault [] <| Parser.run testParser "empty"]
                 }, Cmd.none)
       , update = update
       , view = view >> toUnstyled
@@ -111,6 +112,7 @@ type alias Model =
   , clipboard : String
   , undoStack : UndoStack
   , redoStack : RedoStack
+  , parsedText : List (List StyledChar)
   }
 
 type alias StyledChar =
@@ -131,7 +133,14 @@ update msg model =
           ( applyChangeWithUndo (CaretMoved { toPosition = CaretPosition column line, withSelection = False }) model
           , scrollToCaretIfNeeded
           )
-        KeyboardMsgWrapper keyMsg -> (updateAfterKeyboardMsg keyMsg model, scrollToCaretIfNeeded)
+        KeyboardMsgWrapper keyMsg ->
+          let
+            newModel =
+              updateAfterKeyboardMsg keyMsg model
+            withParsed =
+              { newModel | parsedText = updatedParsedText newModel.textValue model.highlighter model.parsedText model.textValue }
+          in
+          (withParsed, scrollToCaretIfNeeded)
         None -> (model, Cmd.none)
         DebugFail error -> ({ model | textValue = error }, Cmd.none)
         SelectionStarted column line ->
@@ -263,6 +272,28 @@ updateAfterKeyboardMsg msg model =
     Redo ->
       redoLastBatch model
 
+updatedParsedText : String -> Parser (List StyledChar) -> List (List StyledChar) -> String -> List (List StyledChar)
+updatedParsedText newText parser oldParsed oldText =
+    if newText == oldText
+      then oldParsed
+      else
+        let
+          newParsed = splitBy isNewLine <| Result.withDefault [] (Parser.run parser newText)
+        in
+        replaceChangedLines oldParsed newParsed
+
+replaceChangedLines : List (List StyledChar) -> List (List StyledChar) -> List (List StyledChar)
+replaceChangedLines oldLines newLines =
+    if oldLines == newLines
+      then oldLines
+      else List.map2 replaceChangedChars oldLines newLines ++ List.drop (List.length oldLines) newLines
+
+replaceChangedChars : List StyledChar -> List StyledChar -> List StyledChar
+replaceChangedChars oldChars newChars =
+    if oldChars == newChars
+      then oldChars
+      else newChars
+
 applyChangeWithUndo : Change -> Model -> Model
 applyChangeWithUndo change model =
     model
@@ -386,12 +417,12 @@ viewPredefinedStyles =
 
 viewEditor : Model -> Html Msg
 viewEditor model =
-  let
-    parsedLines =
-      Parser.run model.highlighter model.textValue
-        |> Result.withDefault []
-        |> splitBy isNewLine
-  in
+  --let
+  --  parsedLines =
+  --    Parser.run model.highlighter model.textValue
+  --      |> Result.withDefault []
+  --      |> splitBy isNewLine
+  --in
   div
     [ css
       [ padding (px paddingSize)
@@ -418,16 +449,15 @@ viewEditor model =
         ]
         <| List.indexedMap
             (\i v ->
-              Lazy.lazy viewEditorLineWithCaret
-                { isSelectionInProgress = model.isSelectionInProgress
-                , selection = model.selection
-                , caretPositionOnLine = if i == model.caretPosition.line then Just model.caretPosition.column else Nothing
-                , lineNumber = i
-                , isLastLine = i == List.length parsedLines - 1
-                , chars = v
-                }
+              Lazy.lazy6 viewEditorLineWithCaret
+                model.isSelectionInProgress
+                model.selection
+                (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing)
+                i
+                v
+                (i == List.length model.parsedText - 1)
             )
-            parsedLines
+            model.parsedText
     ]
 
 isNewLine : StyledChar -> Bool
@@ -443,8 +473,8 @@ type alias ViewLineParams =
   , isLastLine : Bool
   }
 
-viewEditorLineWithCaret : ViewLineParams -> Html Msg
-viewEditorLineWithCaret { isSelectionInProgress, selection, caretPositionOnLine, chars, isLastLine, lineNumber } =
+viewEditorLineWithCaret : Bool -> Maybe Selection -> Maybe Int -> Int -> List StyledChar -> Bool -> Html Msg
+viewEditorLineWithCaret isSelectionInProgress selection caretPositionOnLine lineNumber chars isLastLine =
     let
       lineEvents =
         if isSelectionInProgress
