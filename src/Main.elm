@@ -158,8 +158,8 @@ updateAfterKeyboardMsg msg model =
       let
         newPos =
           case model.selection of
-                      Nothing -> Pos.updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition
-                      Just sel -> Sel.secondPosition sel
+            Nothing -> Pos.updateCaretPosByIndexUpdate ((+) 1) model.textValue model.caretPosition
+            Just sel -> Sel.secondPosition sel
       in
       applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = False }) model
     MoveCaretRightWithSelection ->
@@ -171,8 +171,8 @@ updateAfterKeyboardMsg msg model =
       let
         newPos =
           case model.selection of
-                      Nothing -> Pos.updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
-                      Just sel -> Sel.firstPosition sel
+            Nothing -> Pos.updateCaretPosByIndexUpdate (\x -> x - 1) model.textValue model.caretPosition
+            Just sel -> Sel.firstPosition sel
       in
       applyChangeWithUndo (CaretMoved { toPosition = newPos, withSelection = False }) model
     MoveCaretLeftWithSelection ->
@@ -307,11 +307,16 @@ scrollToCaretIfNeeded : Cmd Msg
 scrollToCaretIfNeeded =
     Task.map3
       (\element viewport editor -> createRelativeElement { element = element, viewport = viewport, viewportElement = editor })
-      (Dom.getElement "caretChar")
+      (Dom.getElement "caret")
       (Dom.getViewportOf "editor")
       (Dom.getElement "editor")
       |> Task.andThen moveViewportIfNecessary
       |> Task.attempt (always None)
+      --|> Task.attempt (\result ->
+      --                    case result of
+      --                      Ok _ -> Debug.log "successful task" None
+      --                      Err err -> DebugFail <| Debug.toString err
+      --                )
 
 
 -- SUBSCRIPTIONS
@@ -405,10 +410,6 @@ type alias ViewLineParams =
 viewEditorLineWithCaret : ViewLineParams -> Html Msg
 viewEditorLineWithCaret { isSelectionInProgress, selection, caretPositionOnLine, chars, isLastLine, lineNumber } =
     let
-      hasCaret =
-        caretPositionOnLine /= Nothing
-      caretPos =
-        Maybe.withDefault 0 caretPositionOnLine
       lineEvents =
         if isSelectionInProgress
           then
@@ -435,7 +436,7 @@ viewEditorLineWithCaret { isSelectionInProgress, selection, caretPositionOnLine,
       ::  ( chars
             |> List.indexedMap (\i v -> (v, Sel.isPositionSelected selection { column = i, line = lineNumber }))
             |> List.map viewChar
-            |> List.indexedMap (\i v -> (createCharAttributes (hasCaret && (i == caretPos - 1 || (i == 0 && caretPos == 0))) isSelectionInProgress <| CaretPosition i lineNumber) <| v )
+            |> List.indexedMap (\i v -> createCharAttributes isSelectionInProgress (CaretPosition i lineNumber) v )
             |> insertOnMaybeIndex caretPositionOnLine caretWrapper
             |> if isNewLineSelected
                 then flip List.append [selectedNewLine]
@@ -446,8 +447,8 @@ alwaysStopPropagation : String -> Msg -> Html.Styled.Attribute Msg
 alwaysStopPropagation event msg =
   stopPropagationOn event (Json.succeed (msg, True))
 
-createCharAttributes : Bool -> Bool -> CaretPosition -> Html Msg -> Html Msg
-createCharAttributes hasCaret isSelectionInProgress charPos contents =
+createCharAttributes : Bool -> CaretPosition -> Html Msg -> Html Msg
+createCharAttributes isSelectionInProgress charPos contents =
     let
       clickSelectionAttrs =
         if isSelectionInProgress
@@ -467,7 +468,6 @@ createCharAttributes hasCaret isSelectionInProgress charPos contents =
     in
     span
       ([ onClick (ClickChar charPos.column charPos.line)
-      , id (if hasCaret then "caretChar" else "")
       , css
           [ height (pct 100)
           , position relative
