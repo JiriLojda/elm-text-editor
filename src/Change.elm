@@ -42,8 +42,10 @@ applyChange change model =
     case change of
       ClipboardChanged data ->
         let
-          line = String.lines model.textValue |> EList.getAt model.caretPosition.line
-          lineLength = String.length <| Maybe.withDefault "" line
+          lines = String.lines model.textValue
+          line = EList.getAt model.caretPosition.line lines
+          isLastLine = model.caretPosition.line == List.length lines - 1
+          lineLength = (String.length <| Maybe.withDefault "" line) + if isLastLine then 0 else 1
         in
         { model
         | clipboard =

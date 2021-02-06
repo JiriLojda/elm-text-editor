@@ -36,8 +36,10 @@ clipboardChanged =
         <| \caretPosition ->
           let
             text = "abcd\n123456789\nefgh\nijkl\nmnop\nhouse\nhome\ntree\ndrive\nroof"
-            line = EList.getAt caretPosition.line (String.lines text)
-            lineLength = String.length <| Maybe.withDefault "" line
+            lines = String.lines text
+            line = EList.getAt caretPosition.line lines
+            isLastLine = caretPosition.line == List.length lines - 1
+            lineLength = (String.length <| Maybe.withDefault "" line) + if isLastLine then 0 else 1
           in
           applyChange (ClipboardChanged { isLineCopy = True, newClipboard = "something" })
             { sampleModel
