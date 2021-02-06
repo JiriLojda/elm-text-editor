@@ -1,6 +1,6 @@
 module Main exposing (..)
 import Array exposing (Array)
-import Basics.Extra exposing (maxSafeInteger)
+import Basics.Extra exposing (flip, maxSafeInteger)
 import Browser
 import Browser.Dom as Dom exposing (Element)
 import Change exposing (Change(..), applyChange)
@@ -345,6 +345,12 @@ wrapKeyboardDecoder = Json.map (\msg -> (KeyboardMsgWrapper msg, True))
 
 viewEditor : Model -> Html Msg
 viewEditor model =
+  let
+    parsedLines =
+      Parser.run model.highlighter model.textValue
+        |> Result.withDefault []
+        |> splitBy isNewLine
+  in
   div
     [ css
       [ padding (px paddingSize)
@@ -369,39 +375,71 @@ viewEditor model =
           , tabindex 0
         , id "editor"
         ]
-        ( Parser.run model.highlighter model.textValue
-            |> Result.withDefault []
-            |> splitBy isNewLine
-            |> List.indexedMap (\i v -> viewEditorLineWithCaret model.isSelectionInProgress model.selection (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing) i v)
-        )
+        <| List.indexedMap
+            (\i v ->
+              viewEditorLineWithCaret
+                { isSelectionInProgress = model.isSelectionInProgress
+                , selection = model.selection
+                , caretPositionOnLine = if i == model.caretPosition.line then Just model.caretPosition.column else Nothing
+                , lineNumber = i
+                , isLastLine = i == List.length parsedLines - 1
+                , chars = v
+                }
+            )
+            parsedLines
     ]
 
 isNewLine : StyledChar -> Bool
 isNewLine char =
     char.value == '\n'
 
-viewEditorLineWithCaret : Bool -> Maybe Selection -> Maybe Int -> Int -> List StyledChar -> Html Msg
-viewEditorLineWithCaret isSelectionInProgress selection maybeCaretPos num chars =
+type alias ViewLineParams =
+  { isSelectionInProgress : Bool
+  , selection : Maybe Selection
+  , caretPositionOnLine : Maybe Int
+  , lineNumber : Int
+  , chars : List StyledChar
+  , isLastLine : Bool
+  }
+
+viewEditorLineWithCaret : ViewLineParams -> Html Msg
+viewEditorLineWithCaret { isSelectionInProgress, selection, caretPositionOnLine, chars, isLastLine, lineNumber } =
     let
-      hasCaret = maybeCaretPos /= Nothing
-      caretPos = Maybe.withDefault 0 maybeCaretPos
-      lineEvents = if isSelectionInProgress
-        then
-          [ onMouseOver <| SelectionProgressed (List.length chars) num
-          , onMouseUp <| SelectionFinished (List.length chars) num
-          ]
-        else [ onMouseDown <| SelectionStarted (List.length chars) num ]
+      hasCaret =
+        caretPositionOnLine /= Nothing
+      caretPos =
+        Maybe.withDefault 0 caretPositionOnLine
+      lineEvents =
+        if isSelectionInProgress
+          then
+            [ onMouseOver <| SelectionProgressed (List.length chars) lineNumber
+            , onMouseUp <| SelectionFinished (List.length chars) lineNumber
+            ]
+          else
+            [ onMouseDown <| SelectionStarted (List.length chars) lineNumber
+            ]
+      isNewLineSelected = not isLastLine && Sel.isPositionSelected selection (CaretPosition (List.length chars) lineNumber)
     in
     div
-      ([ id <| "line " ++ String.fromInt num
-      , css [ minHeight (px lineHeightConst), lineHeight (px <| lineHeightConst + 3) ]
-      ] ++ lineEvents)
-      <| viewLineNumber num
+      (
+      [ id <| "line " ++ String.fromInt lineNumber
+      , css
+        [ minHeight (px lineHeightConst)
+        , lineHeight (px <| lineHeightConst + 3)
+        , displayFlex
+        , whiteSpace pre
+        ]
+      ] ++ lineEvents
+      )
+      <| viewLineNumber lineNumber
       ::  ( chars
-            |> List.indexedMap (\i v -> (v, Sel.isPositionSelected selection { column = i, line = num }))
+            |> List.indexedMap (\i v -> (v, Sel.isPositionSelected selection { column = i, line = lineNumber }))
             |> List.map viewChar
-            |> List.indexedMap (\i v -> (createCharAttributes (hasCaret && (i == caretPos - 1 || (i == 0 && caretPos == 0))) isSelectionInProgress <| CaretPosition i num) <| v )
-            |> insertOnMaybeIndex maybeCaretPos caretWrapper
+            |> List.indexedMap (\i v -> (createCharAttributes (hasCaret && (i == caretPos - 1 || (i == 0 && caretPos == 0))) isSelectionInProgress <| CaretPosition i lineNumber) <| v )
+            |> insertOnMaybeIndex caretPositionOnLine caretWrapper
+            |> if isNewLineSelected
+                then flip List.append [selectedNewLine]
+                else identity
           )
 
 alwaysStopPropagation : String -> Msg -> Html.Styled.Attribute Msg
@@ -454,12 +492,14 @@ createCharAttributes hasCaret isSelectionInProgress charPos contents =
 viewLineNumber : Int -> Html Msg
 viewLineNumber num =
     span
-      [ css [ height (pct 100)
-            , width (px 50)
-            , backgroundColor (rgb 0 0 200)
-            , color (rgb 250 250 250)
-            , marginRight (px 10)
-            ]
+      [ css
+        [ height (pct 100)
+        , width (px 50)
+        , backgroundColor (rgb 0 0 200)
+        , color (rgb 250 250 250)
+        , marginRight (px 10)
+        , flexBasis (px 0)
+        ]
       ]
       [ text <| String.fromInt num
       ]
@@ -534,6 +574,15 @@ selected word =
   span
     [ css [ backgroundColor <| rgb 2 190 224 ] ]
     [ span [ css [property "mix-blend-mode" "hue"] ][ word ] ]
+
+selectedNewLine =
+  div
+    [ css
+        [ backgroundColor <| rgb 2 190 224
+        , flexGrow <| int 1
+        ]
+    ]
+    []
 
 errored word =
   span
