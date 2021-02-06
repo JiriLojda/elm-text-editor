@@ -7,7 +7,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "elm-test --fuzz 1000",
+    "test": "elm-test",
     "watch": "chokidar \"**/*.elm\" \"index.html\" -c \"elm make src/Main.elm --output=generated/elm.js\" --initial",
     "watch-dev": "chokidar \"**/*.elm\" \"index.html\" -c \"elm make src/Main.elm --output=generated/elm.js --debug\" --initial",
     "make": "elm make src/Main.elm --output=generated/elm.js",

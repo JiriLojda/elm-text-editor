@@ -1,4 +1,4 @@
-module CaretPositionTests exposing (suite, caretPosFuzzer)
+module CaretPositionTests exposing (suite, caretPosFuzzer, textWithIndexFuzzer)
 
 import CaretPosition as Pos exposing (CaretPosition)
 import Expect exposing (Expectation)
