@@ -9,7 +9,6 @@ import Css.Animations as Animation exposing (keyframes)
 import Css.Global as Global exposing (global)
 import Html.Styled.Events exposing (onClick, onInput, onMouseDown, onMouseOver, onMouseUp, preventDefaultOn, stopPropagationOn)
 import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
-import Html.Styled.Keyed as Keyed
 import Html.Styled.Lazy as Lazy
 import Html.Styled.Attributes exposing (class, css, id, tabindex)
 import Json.Decode as Json
@@ -447,17 +446,23 @@ viewEditor model =
           , tabindex 0
         , id "editor"
         ]
-        <| List.indexedMap
-            (\i v ->
-              Lazy.lazy6 viewEditorLineWithCaret
-                model.isSelectionInProgress
-                model.selection
-                (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing)
-                i
-                v
-                (i == List.length model.parsedText - 1)
+        <| (
+          model.parsedText
+            |> List.indexedMap
+                (\i v ->
+                  Lazy.lazy6 viewEditorLineWithCaret
+                    model.isSelectionInProgress
+                    model.selection
+                    (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing)
+                    i
+                    v
+                    (i == List.length model.parsedText - 1)
+                )
+            |> \lst ->
+                if List.isEmpty lst
+                  then [viewEditorLineWithCaret model.isSelectionInProgress model.selection (Just 0) 0 [] True]
+                  else lst
             )
-            model.parsedText
     ]
 
 isNewLine : StyledChar -> Bool
