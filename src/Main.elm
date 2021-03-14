@@ -307,20 +307,42 @@ shouldMoveRight : Element -> Bool
 shouldMoveRight el =
     el.element.x - el.viewport.x > el.viewport.width - viewportCaretPadding - caretWidth
 
+shouldMoveUp : Element -> Bool
+shouldMoveUp el =
+    el.element.y - el.viewport.y < viewportCaretPadding
+
+shouldMoveDown : Element -> Bool
+shouldMoveDown el =
+    el.element.y - el.viewport.y > el.viewport.height - viewportCaretPadding
+
 findNewX : Element -> Float
 findNewX el =
-    if shouldMoveLeft el
-      then el.element.x - viewportCaretPadding - viewportOverMoveToCaretMargin + caretWidth
-      else el.element.x - el.viewport.width + viewportCaretPadding + viewportOverMoveToCaretMargin
+  if not (shouldMoveLeft el || shouldMoveRight el)
+    then
+      el.viewport.x
+    else
+      if shouldMoveLeft el
+        then el.element.x - viewportCaretPadding - viewportOverMoveToCaretMargin + caretWidth
+        else el.element.x - el.viewport.width + viewportCaretPadding + viewportOverMoveToCaretMargin
+
+findNewY : Element -> Float
+findNewY el =
+  if not (shouldMoveUp el || shouldMoveDown el)
+    then
+      el.viewport.y
+    else
+      if shouldMoveUp el
+        then el.element.y - viewportCaretPadding - viewportOverMoveToCaretMargin
+        else el.element.y - el.viewport.height + viewportCaretPadding + viewportOverMoveToCaretMargin
 
 shouldMove : Element -> Bool
 shouldMove el =
-    shouldMoveLeft el || shouldMoveRight el
+    shouldMoveLeft el || shouldMoveRight el || shouldMoveUp el || shouldMoveDown el
 
 moveViewportIfNecessary : Element -> Task.Task Dom.Error ()
 moveViewportIfNecessary el =
     if shouldMove el
-      then Dom.setViewportOf "editor" (findNewX el) el.viewport.y
+      then Dom.setViewportOf "editor" (findNewX el) (findNewY el)
       else Task.succeed ()
 
 createRelativeElement : { element: Element, viewport: Dom.Viewport, viewportElement: Element } -> Element
@@ -369,7 +391,11 @@ view model =
       [ br [] []
       , viewTestArea model
       , div
-        [ css [ height (px 200) ]
+        [ css
+          [ height (px 200)
+          , width (px 500)
+          , marginLeft (px 50)
+          ]
         ]
         [ viewEditor model
         ]
@@ -442,18 +468,17 @@ viewEditor model =
         [ css
             [ whiteSpace noWrap
             , fontSize (px fontSizeConst)
-            , maxWidth (px lineWidthConst)
             , position relative
             , focus [ backgroundColor (rgba 10 200 50 0.7) ]
             , overflowX auto
             , overflowY auto
             , outline none
-            , padding (px paddingSize)
             , fontFamily monospace
             , boxSizing borderBox
             , property "user-select" "none"
             , cursor text_
             , height (pct 100)
+            , width (pct 100)
             ]
           , preventDefaultOn "keydown" <| wrapKeyboardDecoder keyboardMsgDecoder
           , tabindex 0
