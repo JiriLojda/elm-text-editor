@@ -364,12 +364,16 @@ subscriptions _ =
 
 view : Model -> Html Msg
 view model =
-    div []
-        [ br [] []
-        , viewPredefinedStyles
-        , viewTestArea model
-        , viewEditor model
+    div
+      []
+      [ br [] []
+      , viewTestArea model
+      , div
+        [ css [ height (px 200) ]
         ]
+        [ viewEditor model
+        ]
+      ]
 
 viewTestArea model =
   textarea
@@ -382,8 +386,17 @@ viewTestArea model =
 wrapKeyboardDecoder : Json.Decoder KeyboardMsg -> Json.Decoder (Msg, Bool)
 wrapKeyboardDecoder = Json.map (\msg -> (KeyboardMsgWrapper msg, True))
 
-viewPredefinedStyles : Html Msg
-viewPredefinedStyles =
+countDigits : Int -> Int
+countDigits number =
+    if number > 0
+      then 1 + countDigits (number // 10)
+      else 0
+
+viewPredefinedStyles : Int -> Html Msg
+viewPredefinedStyles linesNumber =
+    let
+      lineNumberWidth = toFloat (10 + countDigits (max 1 (linesNumber - 1)) * 10)
+    in
     global
       [ Global.class "line"
         [ minHeight (px lineHeightConst)
@@ -406,11 +419,14 @@ viewPredefinedStyles =
         ]
       , Global.class "line-number"
         [ height (pct 100)
-        , width (px 50)
+        , maxWidth (px lineNumberWidth)
+        , minWidth (px lineNumberWidth)
         , backgroundColor (rgb 0 0 200)
         , color (rgb 250 250 250)
         , marginRight (px 10)
-        , flexBasis (px 0)
+        , paddingLeft (px 5)
+        , paddingRight (px 5)
+        , boxSizing borderBox
         ]
       ]
 
@@ -422,17 +438,7 @@ viewEditor model =
   --      |> Result.withDefault []
   --      |> splitBy isNewLine
   --in
-  div
-    [ css
-      [ padding (px paddingSize)
-      , fontFamily monospace
-      , overflow hidden
-      , boxSizing borderBox
-      , property "user-select" "none"
-      , cursor text_
-      ]
-    ]
-    [ div
+    div
         [ css
             [ whiteSpace noWrap
             , fontSize (px fontSizeConst)
@@ -440,7 +446,14 @@ viewEditor model =
             , position relative
             , focus [ backgroundColor (rgba 10 200 50 0.7) ]
             , overflowX auto
+            , overflowY auto
             , outline none
+            , padding (px paddingSize)
+            , fontFamily monospace
+            , boxSizing borderBox
+            , property "user-select" "none"
+            , cursor text_
+            , height (pct 100)
             ]
           , preventDefaultOn "keydown" <| wrapKeyboardDecoder keyboardMsgDecoder
           , tabindex 0
@@ -458,12 +471,12 @@ viewEditor model =
                     v
                     (i == List.length model.parsedText - 1)
                 )
-            |> \lst ->
+            |> (\lst ->
                 if List.isEmpty lst
                   then [viewEditorLineWithCaret model.isSelectionInProgress model.selection (Just 0) 0 [] True]
-                  else lst
+                  else lst)
+            |> \lst -> viewPredefinedStyles (List.length <| String.lines model.textValue) :: lst
             )
-    ]
 
 isNewLine : StyledChar -> Bool
 isNewLine char =
