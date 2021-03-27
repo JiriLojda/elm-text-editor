@@ -65,3 +65,9 @@ removeSelectedText selection text =
           endIndex = Pos.caretPosToIndex text correctedSel.end
         in
         String.left startIndex text ++ String.dropLeft endIndex text
+
+isEmptySelection : Maybe Selection -> Bool
+isEmptySelection maybeSelection =
+    case maybeSelection of
+      Nothing -> True
+      Just { start, end } -> start == end

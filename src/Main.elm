@@ -167,7 +167,10 @@ update msg model =
                 position = convertClickedPosToCaretPos model { x = x, y = line}
                 updatedModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model
               in
-              ({ updatedModel | isSelectionInProgress = False }, Task.attempt (always None) <| Dom.focus "editor")
+              ({ updatedModel
+              | isSelectionInProgress = False
+              , selection = if Sel.isEmptySelection updatedModel.selection then Nothing else updatedModel.selection
+              }, Task.attempt (always None) <| Dom.focus "editor")
             else
               (model, Cmd.none)
         CharMeasured size ->

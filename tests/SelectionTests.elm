@@ -141,6 +141,36 @@ suite =
                 , (.end >> Expect.equal (CaretPosition column line))
                 ]
         ]
+
+      , describe "isEmptySelection"
+        [ fuzz (caretPosFuzzer 0 50 0 50) "selection with the start and the end position the same is always empty"
+          <| \pos ->
+            Sel.isEmptySelection (Just <| Selection pos pos)
+              |> Expect.true "Selections with start == end should always be empty"
+
+        , test "Nothing is empty"
+          <| \_ ->
+            Sel.isEmptySelection Nothing
+              |> Expect.true "Nothing should be empty"
+
+        , fuzz2 Fuzz.int Fuzz.int "different columns => non-empty"
+          <| \line1 line2 ->
+            let
+              start = CaretPosition 3 line1
+              end = CaretPosition 4 line2
+            in
+            Sel.isEmptySelection (Just <| Selection start end)
+              |> Expect.false "selection with different start.column and end.column shouldn't be empty"
+
+        , fuzz2 Fuzz.int Fuzz.int "different lines => non-empty"
+          <| \column1 column2 ->
+            let
+              start = CaretPosition column1 3
+              end = CaretPosition column2 4
+            in
+            Sel.isEmptySelection (Just <| Selection start end)
+              |> Expect.false "selection with different start.line and end.line shouldn't be empty"
+        ]
       ]
 
 selectionFuzzer : Fuzzer Selection
