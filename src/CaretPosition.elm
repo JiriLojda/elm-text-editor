@@ -25,11 +25,12 @@ caretPosToIndex textValue caretPos =
 indexToCaretPos : String -> Int -> CaretPosition
 indexToCaretPos textValue index =
     let
-      relevantChars = List.take index <| String.toList textValue
-      newLinesCount = EList.count ((==) '\n') relevantChars
-      lastLine = if newLinesCount == 0 then relevantChars else EList.takeWhileRight ((/=) '\n') relevantChars
+      relevantChars = String.slice 0 index textValue
+      lines = String.lines relevantChars
+      newLinesCount = List.length lines - 1
+      lastLine = Maybe.withDefault "" <| EList.last lines
     in
-    CaretPosition (List.length lastLine) newLinesCount
+    CaretPosition (String.length lastLine) newLinesCount
 
 updateCaretPosByIndexUpdate : (Int -> Int) -> String -> CaretPosition -> CaretPosition
 updateCaretPosByIndexUpdate updater str oldPos =

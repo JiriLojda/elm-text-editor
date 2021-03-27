@@ -56,9 +56,10 @@ keyDecoder =
     Json.field "key" Json.string
       |> Json.andThen (\key ->
           let
-            char = case String.uncons key of
-                    Just (c, "") -> Just c
-                    _ -> Nothing
+            char =
+              case String.uncons key of
+                Just (c, "") -> Just c
+                _ -> Nothing
           in
           case (char, key) of
             (Just c, _) -> Json.succeed (CharKey c)

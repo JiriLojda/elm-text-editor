@@ -1,16 +1,16 @@
 module Main exposing (..)
 import Array exposing (Array)
-import Basics.Extra exposing (flip, maxSafeInteger)
+import Basics.Extra exposing (maxSafeInteger)
 import Browser
 import Browser.Dom as Dom exposing (Element)
 import Change exposing (Change(..), applyChange)
 import Css exposing (..)
 import Css.Animations as Animation exposing (keyframes)
 import Css.Global as Global exposing (global)
-import Html.Styled.Events exposing (onClick, onInput, onMouseDown, onMouseOver, onMouseUp, preventDefaultOn, stopPropagationOn)
+import Html.Styled.Events exposing (on, onInput, preventDefaultOn)
 import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
 import Html.Styled.Lazy as Lazy
-import Html.Styled.Attributes exposing (class, css, id, tabindex)
+import Html.Styled.Attributes exposing (class, css, id, style, tabindex)
 import Json.Decode as Json
 import KeyboardMsg exposing (KeyboardMsg(..), keyboardMsgDecoder)
 import List.Extra as EList exposing (dropWhile, last, takeWhile)
@@ -33,12 +33,23 @@ main =
                 , clipboard = ""
                 , undoStack = []
                 , redoStack = []
-                , parsedText = [Result.withDefault [] <| Parser.run testParser "empty"]
-                }, Cmd.none)
+                , charSize = 0
+                }, measureCharSize)
       , update = update
       , view = view >> toUnstyled
       , subscriptions = subscriptions
       }
+
+measureCharSize : Cmd Msg
+measureCharSize =
+  Dom.getElement "charTester"
+    |> Task.map (\x -> x.element.width / 60)
+    |> Task.attempt
+      (\result ->
+        case result of
+          Ok size -> CharMeasured size
+          Err err -> DebugFail <| Debug.toString err
+      )
 
 testKeyword str =
   Parser.keyword str
@@ -87,6 +98,8 @@ paddingSize = 10
 viewportCaretPadding = 20
 viewportOverMoveToCaretMargin = 10
 caretWidth = 2
+lineNumberMarginConst = 10
+lineNumberHorizontalPaddingConst = 5
 
 
 -- MODEL
@@ -95,12 +108,12 @@ caretWidth = 2
 type Msg
       = KeyboardMsgWrapper KeyboardMsg
       | TextChangedTestArea String
-      | ClickChar Int Int
       | SelectionStarted Int Int
       | SelectionProgressed Int Int
       | SelectionFinished Int Int
       | None
       | DebugFail String
+      | CharMeasured Float
 
 type alias Model =
   { textValue : String
@@ -111,7 +124,7 @@ type alias Model =
   , clipboard : String
   , undoStack : UndoStack
   , redoStack : RedoStack
-  , parsedText : List (List StyledChar)
+  , charSize : Float
   }
 
 type alias StyledChar =
@@ -128,37 +141,37 @@ update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
     case msg of
         TextChangedTestArea text -> ({ model | textValue = text }, Cmd.none)
-        ClickChar column line ->
-          ( applyChangeWithUndo (CaretMoved { toPosition = CaretPosition column line, withSelection = False }) model
-          , scrollToCaretIfNeeded
-          )
         KeyboardMsgWrapper keyMsg ->
-          let
-            newModel =
-              updateAfterKeyboardMsg keyMsg model
-            withParsed =
-              { newModel | parsedText = updatedParsedText newModel.textValue model.highlighter model.parsedText model.textValue }
-          in
-          (withParsed, scrollToCaretIfNeeded)
+          (updateAfterKeyboardMsg keyMsg model, scrollToCaretIfNeeded)
         None -> (model, Cmd.none)
         DebugFail error -> ({ model | textValue = error }, Cmd.none)
-        SelectionStarted column line ->
+        SelectionStarted line x ->
           let
-            position = CaretPosition column line
+            position = convertClickedPosToCaretPos model { x = x, y = line}
             updatedModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = False }) model
           in
           ({ updatedModel | isSelectionInProgress = True }, Cmd.none)
-        SelectionProgressed column line ->
-          let
-            position = CaretPosition column line
-          in
-          (applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model, scrollToCaretIfNeeded)
-        SelectionFinished column line ->
-          let
-            position = CaretPosition column line
-            updatedModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model
-          in
-          ({ updatedModel | isSelectionInProgress = False }, Task.attempt (always None) <| Dom.focus "editor")
+        SelectionProgressed line x ->
+          if model.isSelectionInProgress
+            then
+              let
+                position = convertClickedPosToCaretPos model { x = x, y = line}
+              in
+              (applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model, scrollToCaretIfNeeded)
+            else
+              (model, Cmd.none)
+        SelectionFinished line x ->
+          if model.isSelectionInProgress
+            then
+              let
+                position = convertClickedPosToCaretPos model { x = x, y = line}
+                updatedModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model
+              in
+              ({ updatedModel | isSelectionInProgress = False }, Task.attempt (always None) <| Dom.focus "editor")
+            else
+              (model, Cmd.none)
+        CharMeasured size ->
+          ({ model | charSize = size }, Cmd.none)
 
 updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
@@ -271,27 +284,29 @@ updateAfterKeyboardMsg msg model =
     Redo ->
       redoLastBatch model
 
-updatedParsedText : String -> Parser (List StyledChar) -> List (List StyledChar) -> String -> List (List StyledChar)
-updatedParsedText newText parser oldParsed oldText =
-    if newText == oldText
-      then oldParsed
-      else
-        let
-          newParsed = splitBy isNewLine <| Result.withDefault [] (Parser.run parser newText)
-        in
-        replaceChangedLines oldParsed newParsed
+convertClickedPosToCaretPos : Model -> { x : Int, y: Int } -> CaretPosition
+convertClickedPosToCaretPos model { x, y } =
+  let
+    lineNumberFullWidth = countLineNumberFullWidth model.textValue
+    lines = String.lines model.textValue
+    clickedXIndex = floor ((toFloat x - lineNumberFullWidth) / model.charSize)
+    clickedLineIndex = min (List.length lines - 1) y
+    clickedLine =
+      lines
+        |> EList.getAt y
+        |> Maybe.withDefault ""
+  in
+  CaretPosition (min (String.length clickedLine) clickedXIndex) clickedLineIndex
 
-replaceChangedLines : List (List StyledChar) -> List (List StyledChar) -> List (List StyledChar)
-replaceChangedLines oldLines newLines =
-    if oldLines == newLines
-      then oldLines
-      else List.map2 replaceChangedChars oldLines newLines ++ List.drop (List.length oldLines) newLines
 
-replaceChangedChars : List StyledChar -> List StyledChar -> List StyledChar
-replaceChangedChars oldChars newChars =
-    if oldChars == newChars
-      then oldChars
-      else newChars
+countLineNumberFullWidth : String -> Float
+countLineNumberFullWidth textValue =
+    textValue
+      |> String.lines
+      |> List.length
+      |> max 1
+      |> countLineNumberWidth
+      |> (+) lineNumberMarginConst
 
 applyChangeWithUndo : Change -> Model -> Model
 applyChangeWithUndo change model =
@@ -353,7 +368,8 @@ createRelativeElement { element, viewport, viewportElement } =
     { scene = viewport.scene
     , viewport = viewport.viewport
     , element =
-        { elem | x = elem.x - viewportElement.element.x + viewport.viewport.x
+        { elem
+        | x = elem.x - viewportElement.element.x + viewport.viewport.x
         , y = elem.y - viewportElement.element.y + viewport.viewport.y
         }
     }
@@ -362,7 +378,7 @@ scrollToCaretIfNeeded : Cmd Msg
 scrollToCaretIfNeeded =
     Task.map3
       (\element viewport editor -> createRelativeElement { element = element, viewport = viewport, viewportElement = editor })
-      (Dom.getElement "caret")
+      (Dom.getElement "caret-inner")
       (Dom.getViewportOf "editor")
       (Dom.getElement "editor")
       |> Task.andThen moveViewportIfNecessary
@@ -392,8 +408,8 @@ view model =
       , viewTestArea model
       , div
         [ css
-          [ height (px 200)
-          , width (px 500)
+          [ height (px 300)
+          , width (px 400)
           , marginLeft (px 50)
           ]
         ]
@@ -404,7 +420,7 @@ view model =
 viewTestArea model =
   textarea
     [ onInput TextChangedTestArea
-    , css [ width <| px 300, height <| px 300, backgroundColor <| rgb 100 200 0 ]
+    , css [ width <| px 100, height <| px 100, backgroundColor <| rgb 100 200 0 ]
     ]
     [ text model.textValue
     ]
@@ -418,15 +434,19 @@ countDigits number =
       then 1 + countDigits (number // 10)
       else 0
 
+countLineNumberWidth : Int -> Float
+countLineNumberWidth linesNumber =
+    toFloat (10 + countDigits (max 1 linesNumber) * 10)
+
 viewPredefinedStyles : Int -> Html Msg
 viewPredefinedStyles linesNumber =
     let
-      lineNumberWidth = toFloat (10 + countDigits (max 1 (linesNumber - 1)) * 10)
+      lineNumberWidth = countLineNumberWidth linesNumber
     in
     global
       [ Global.class "line"
         [ minHeight (px lineHeightConst)
-        , lineHeight (px <| lineHeightConst + 3)
+        , lineHeight (px lineHeightConst)
         , displayFlex
         , whiteSpace pre
         ]
@@ -449,21 +469,25 @@ viewPredefinedStyles linesNumber =
         , minWidth (px lineNumberWidth)
         , backgroundColor (rgb 0 0 200)
         , color (rgb 250 250 250)
-        , marginRight (px 10)
-        , paddingLeft (px 5)
-        , paddingRight (px 5)
+        , marginRight (px lineNumberMarginConst)
+        , paddingLeft (px lineNumberHorizontalPaddingConst)
+        , paddingRight (px lineNumberHorizontalPaddingConst)
         , boxSizing borderBox
+        ]
+      , Global.class "line-selection"
+        [ backgroundColor (rgb 2 190 224)
+        , property "mix-blend-mode" "hue"
+        , position absolute
         ]
       ]
 
+clickDecoder : (Int -> Msg) -> Json.Decoder Msg
+clickDecoder msgCreator =
+  Json.map msgCreator
+    (Json.field "offsetX" (Json.int))
+
 viewEditor : Model -> Html Msg
 viewEditor model =
-  --let
-  --  parsedLines =
-  --    Parser.run model.highlighter model.textValue
-  --      |> Result.withDefault []
-  --      |> splitBy isNewLine
-  --in
     div
         [ css
             [ whiteSpace noWrap
@@ -484,28 +508,98 @@ viewEditor model =
           , tabindex 0
         , id "editor"
         ]
-        <| (
-          model.parsedText
-            |> List.indexedMap
-                (\i v ->
-                  Lazy.lazy6 viewEditorLineWithCaret
-                    model.isSelectionInProgress
-                    model.selection
-                    (if i == model.caretPosition.line then Just model.caretPosition.column else Nothing)
-                    i
-                    v
-                    (i == List.length model.parsedText - 1)
-                )
+        <| viewCharSizeTest
+        :: viewPredefinedStyles (List.length <| String.lines model.textValue)
+        :: viewPositionedCaret model
+        :: viewSelectionOverlay model
+        :: [div [] ( model.textValue
+            |> String.lines
+            |> List.indexedMap (Lazy.lazy2 viewEditorLineWithCaret)
             |> (\lst ->
                 if List.isEmpty lst
-                  then [viewEditorLineWithCaret model.isSelectionInProgress model.selection (Just 0) 0 [] True]
-                  else lst)
-            |> \lst -> viewPredefinedStyles (List.length <| String.lines model.textValue) :: lst
-            )
+                  then [viewEditorLineWithCaret 0 ""]
+                  else lst))]
 
-isNewLine : StyledChar -> Bool
-isNewLine char =
-    char.value == '\n'
+viewPositionedCaret : Model -> Html Msg
+viewPositionedCaret model =
+    div
+      [ id "caretPositioned"
+      , css
+          [ position absolute
+          , top <| px (toFloat <| lineHeightConst * model.caretPosition.line)
+          , left <| px (countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column))
+          , pointerEvents none
+          ]
+      ]
+      [ caret
+      ]
+
+viewSelectionOverlay : Model -> Html msg
+viewSelectionOverlay model =
+  case model.selection of
+    Nothing -> div [] []
+    Just selection ->
+      let
+        normalizedSelection = Sel.normalizeSelection selection
+        lineNumWidth = countLineNumberFullWidth model.textValue
+      in
+      model.textValue
+        |> String.lines
+        |> List.indexedMap (\i line -> if i >= normalizedSelection.start.line && i <= normalizedSelection.end.line then Just line else Nothing)
+        |> List.indexedMap (\i mLine -> Maybe.map (always <| viewLineSelection i lineNumWidth model.charSize normalizedSelection) mLine)
+        |> List.concatMap (Maybe.withDefault [] << Maybe.map (\e -> [e]))
+        |> div []
+
+viewLineSelection : Int -> Float -> Float -> Selection -> Html msg
+viewLineSelection lineNumber lineLeftOffset charWidth selection =
+    let
+      topPx = lineNumber * lineHeightConst
+      selectionStart =
+        if selection.start.line == lineNumber
+          then selection.start.column
+          else 0
+      leftPx = lineLeftOffset + (toFloat selectionStart * charWidth)
+      lineSelectionWidth =
+        if selection.end.line == lineNumber
+          then Px ((toFloat selection.end.column * charWidth) - leftPx + lineLeftOffset)
+          else UntilLineEnd
+    in
+    viewSelection (toFloat topPx) leftPx lineSelectionWidth
+
+type LineSelectionWidth
+  = Px Float
+  | UntilLineEnd
+
+viewSelection : Float -> Float -> LineSelectionWidth -> Html msg
+viewSelection topPx leftPx lineSelectionWidth =
+    let
+      widthProperty =
+        case lineSelectionWidth of
+          Px w -> String.fromFloat w ++ "px"
+          UntilLineEnd -> "100%"
+    in
+    div
+      [ class "line-selection"
+      , style "height" (String.fromInt lineHeightConst ++ "px")
+      , style "top" (String.fromFloat topPx ++ "px")
+      , style "left" (String.fromFloat leftPx ++ "px")
+      , style "width" widthProperty
+      ]
+      []
+
+viewCharSizeTest : Html msg
+viewCharSizeTest =
+  span
+    [ css
+      [ opacity (num 0)
+      , padding (px 0)
+      , position absolute
+      , pointerEvents none
+      ]
+    , id "charTester"
+    ]
+    [ text "mmmmmmmmmmiiiiiiiiiioooooooooowwwwwwwwwwlllllllllljjjjjjjjjj"
+    ]
 
 type alias ViewLineParams =
   { isSelectionInProgress : Bool
@@ -516,71 +610,27 @@ type alias ViewLineParams =
   , isLastLine : Bool
   }
 
-viewEditorLineWithCaret : Bool -> Maybe Selection -> Maybe Int -> Int -> List StyledChar -> Bool -> Html Msg
-viewEditorLineWithCaret isSelectionInProgress selection caretPositionOnLine lineNumber chars isLastLine =
-    let
-      lineEvents =
-        if isSelectionInProgress
-          then
-            [ onMouseOver <| SelectionProgressed (List.length chars) lineNumber
-            , onMouseUp <| SelectionFinished (List.length chars) lineNumber
-            ]
-          else
-            [ onMouseDown <| SelectionStarted (List.length chars) lineNumber
-            ]
-      isNewLineSelected = not isLastLine && Sel.isPositionSelected selection (CaretPosition (List.length chars) lineNumber)
-    in
+viewEditorLineWithCaret : Int -> String -> Html Msg
+viewEditorLineWithCaret lineNumber lineContent =
     div
-      (
       [ id <| "line " ++ String.fromInt lineNumber
       , class "line"
-      ] ++ lineEvents
-      )
-      <| viewLineNumber lineNumber
-      ::  ( chars
-            |> List.indexedMap (\i v -> (v, Sel.isPositionSelected selection { column = i, line = lineNumber }))
-            |> List.map viewChar
-            |> List.indexedMap (\i v -> createCharAttributes isSelectionInProgress (CaretPosition i lineNumber) v )
-            |> insertOnMaybeIndex caretPositionOnLine caretWrapper
-            |> (if isNewLineSelected
-                then flip List.append [selectedNewLine]
-                else identity)
-          )
-
-alwaysStopPropagation : String -> Msg -> Html.Styled.Attribute Msg
-alwaysStopPropagation event msg =
-  stopPropagationOn event (Json.succeed (msg, True))
-
-createCharAttributes : Bool -> CaretPosition -> Html Msg -> Html Msg
-createCharAttributes isSelectionInProgress charPos contents =
-    let
-      clickSelectionAttrs =
-        if isSelectionInProgress
-          then
-            [ alwaysStopPropagation "mouseup" (SelectionFinished (charPos.column) charPos.line)
-            , alwaysStopPropagation "mouseover" (SelectionProgressed (charPos.column) charPos.line)
-            ]
-          else [ alwaysStopPropagation "mousedown" (SelectionStarted charPos.column charPos.line) ]
-      separatorAttrs =
-        if not isSelectionInProgress
-          then []
-          else
-            [ alwaysStopPropagation "mouseenter" (SelectionProgressed (charPos.column) charPos.line)
-            , alwaysStopPropagation "mouseup" (SelectionFinished (charPos.column) charPos.line)
-            , alwaysStopPropagation "mousedown" (SelectionStarted charPos.column charPos.line)
-            ]
-    in
-    span
-      ([ onClick (ClickChar charPos.column charPos.line)
-      , class "char-outer"
-      ] ++ clickSelectionAttrs)
-      [ contents
-      , span
-          ([ id "pseudo-clicker"
-          , class "char-inner"
-          ] ++ separatorAttrs)
-          []
+      , on "mousedown" <| clickDecoder <| SelectionStarted lineNumber
+      , on "mousemove" <| clickDecoder <| SelectionProgressed lineNumber
+      , on "mouseup" <| clickDecoder <| SelectionFinished lineNumber
+      , style "position" "absolute"
+      , style "top" (String.fromInt (lineNumber * lineHeightConst) ++ "px")
+      , style "left" "0"
+      , style "right" "0"
+      , style "contain" "style size layout"
       ]
+      [ viewLineNumber lineNumber
+      , text lineContent
+      ]
+
+--alwaysStopPropagation : String -> Msg -> Html.Styled.Attribute Msg
+--alwaysStopPropagation event msg =
+--  stopPropagationOn event (Json.succeed (msg, True))
 
 viewLineNumber : Int -> Html Msg
 viewLineNumber num =
@@ -600,40 +650,15 @@ splitBy isDivider list =
       Just (first, []) -> if isDivider first then [[]] else [[first]]
       Just (first, rest) -> if isDivider first then continue rest else continue list
 
-viewChar : (StyledChar, Bool) -> Html Msg
-viewChar (char, isSelected) =
-    let
-      renderedChar = text <| String.fromChar char.value
-      charWithSelection = if isSelected then selected renderedChar else renderedChar
-    in
-    case (char.isKeyword, char.isErrored) of
-      (True, True) -> keyword <| errored charWithSelection
-      (True, False) -> keyword charWithSelection
-      (False, True) -> errored charWithSelection
-      (False, False) -> charWithSelection
-
-insertOnIndex : Int -> a -> List a -> List a
-insertOnIndex index element lst =
-  List.take index lst ++ element :: List.drop index lst
-
-insertOnMaybeIndex : Maybe Int -> a -> List a -> List a
-insertOnMaybeIndex maybeIndex elem list =
-    case maybeIndex of
-      Nothing -> list
-      Just index -> insertOnIndex index elem list
-
-caretWrapper : Html Msg
-caretWrapper =
-    div
-      [ id "caret"
-      , css
-          [ width (px 0)
-          , display inlineBlock
-          , position relative
-          ]
-      ]
-      [ caret
-      ]
+--insertOnIndex : Int -> a -> List a -> List a
+--insertOnIndex index element lst =
+--  List.take index lst ++ element :: List.drop index lst
+--
+--insertOnMaybeIndex : Maybe Int -> a -> List a -> List a
+--insertOnMaybeIndex maybeIndex elem list =
+--    case maybeIndex of
+--      Nothing -> list
+--      Just index -> insertOnIndex index elem list
 
 caret =
   span
@@ -651,26 +676,12 @@ caret =
     , tabindex 0
     ] []
 
-keyword word =
-  span
-    [ css [ color <| rgb 242 151 5, whiteSpace preLine ] ]
-    [ word ]
-
-selected word =
-  span
-    [ css [ backgroundColor <| rgb 2 190 224 ] ]
-    [ span [ css [property "mix-blend-mode" "hue"] ][ word ] ]
-
-selectedNewLine =
-  div
-    [ css
-        [ backgroundColor <| rgb 2 190 224
-        , flexGrow <| int 1
-        ]
-    ]
-    []
-
-errored word =
-  span
-    [ css [ textDecoration3 underline wavy <| rgb 250 0 0 ] ]
-    [ word ]
+--keyword word =
+--  span
+--    [ css [ color <| rgb 242 151 5, whiteSpace preLine ] ]
+--    [ word ]
+--
+--errored word =
+--  span
+--    [ css [ textDecoration3 underline wavy <| rgb 250 0 0 ] ]
+--    [ word ]
