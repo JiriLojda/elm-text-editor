@@ -1,5 +1,4 @@
 module Main exposing (..)
-import Array exposing (Array)
 import Basics.Extra exposing (maxSafeInteger)
 import Browser
 import Browser.Dom as Dom exposing (Element)
@@ -7,14 +6,14 @@ import Change exposing (Change(..), applyChange)
 import Css exposing (..)
 import Css.Animations as Animation exposing (keyframes)
 import Css.Global as Global exposing (global)
+import Dict exposing (Dict)
 import Html.Styled.Events exposing (on, onInput, preventDefaultOn)
 import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
-import Html.Styled.Lazy as Lazy
 import Html.Styled.Attributes exposing (class, css, id, style, tabindex)
 import Json.Decode as Json
 import KeyboardMsg exposing (KeyboardMsg(..), keyboardMsgDecoder)
 import List.Extra as EList exposing (dropWhile, last, takeWhile)
-import Parser exposing ((|=), Parser)
+import Parser exposing ((|.), (|=), Parser)
 import String
 import Task as Task
 import CaretPosition as Pos exposing (CaretPosition)
@@ -51,41 +50,36 @@ measureCharSize =
           Err err -> DebugFail <| Debug.toString err
       )
 
-testKeyword str =
-  Parser.keyword str
-  |> Parser.andThen (always <| Parser.succeed <| List.map keywordedChar <| String.toList str)
-  |> Parser.map Array.fromList
-
-testError str =
-  Parser.keyword str
-  |> Parser.andThen (always <| Parser.succeed <| List.map erroredChar <| String.toList str)
-  |> Parser.map Array.fromList
-
 testParser =
-  Parser.loop Array.empty testParserStep
-    |> Parser.map Array.toList
+  Parser.loop [] testParserStep
 
-appendingParserLoop : Array a -> Parser (Array a -> Parser.Step (Array a) (Array a))
-appendingParserLoop arrResults = Parser.succeed (Parser.Loop << Array.append arrResults)
-anyCharTaker = Parser.chompIf (always True)
-                |> Parser.getChompedString
-                |> Parser.map (String.toList >> List.map plainChar >> Array.fromList)
+type alias Located a =
+  { from : (Int, Int)
+  , value : a
+  , to : (Int, Int)
+  }
 
-testParserStep : Array StyledChar -> Parser (Parser.Step (Array StyledChar) (Array StyledChar))
-testParserStep arrResults =
+located : Parser a -> Parser { from : (Int, Int), to : (Int, Int), value: a }
+located parser =
+  Parser.succeed Located
+    |= Parser.getPosition
+    |= parser
+    |= Parser.getPosition
+
+parseToken : String -> String -> List StyledFragment -> Parser (Parser.Step (List StyledFragment) (List StyledFragment))
+parseToken token class tmpResults =
+  located (Parser.succeed class |. Parser.token token)
+    |> Parser.map (\found -> Parser.Loop <| StyledFragment found.from class found.to :: tmpResults)
+
+testParserStep : List StyledFragment -> Parser (Parser.Step (List StyledFragment) (List StyledFragment))
+testParserStep results =
   Parser.oneOf
-    [ appendingParserLoop arrResults
-        |= testKeyword "lol"
-    , appendingParserLoop arrResults
-        |= testError "lolz"
-    , appendingParserLoop arrResults
-        |= anyCharTaker
-    , Parser.end |> Parser.map (always <| Parser.Done arrResults)
+    [ parseToken "lol" "test-keyword" results
+    , parseToken "lolz" "test-error" results
+    , Parser.end |> Parser.map (always <| Parser.Done results)
+    , Parser.chompIf (always True)
+      |> Parser.map (always <| Parser.Loop results)
     ]
-
-keywordedChar c = StyledChar c True False
-erroredChar c = StyledChar c False True
-plainChar c = StyledChar c False False
 
 
 -- CONSTANTS
@@ -94,12 +88,12 @@ plainChar c = StyledChar c False False
 lineHeightConst = 17
 lineWidthConst = 200
 fontSizeConst = 16
-paddingSize = 10
 viewportCaretPadding = 20
 viewportOverMoveToCaretMargin = 10
 caretWidth = 2
 lineNumberMarginConst = 10
 lineNumberHorizontalPaddingConst = 5
+caretZIndex = 100
 
 
 -- MODEL
@@ -118,13 +112,19 @@ type Msg
 type alias Model =
   { textValue : String
   , caretPosition : CaretPosition
-  , highlighter : Parser (List StyledChar)
+  , highlighter : Parser (List StyledFragment)
   , selection : Maybe Selection
   , isSelectionInProgress : Bool
   , clipboard : String
   , undoStack : UndoStack
   , redoStack : RedoStack
   , charSize : Float
+  }
+
+type alias StyledFragment =
+  { from : (Int, Int)
+  , class : String
+  , to : (Int, Int)
   }
 
 type alias StyledChar =
@@ -482,6 +482,16 @@ viewPredefinedStyles linesNumber =
         , property "mix-blend-mode" "hue"
         , position absolute
         ]
+      , Global.class "test-keyword"
+        [ backgroundColor (rgb 80 80 220)
+        ]
+      , Global.class "test-error"
+        [ backgroundColor (rgb 0 0 0)
+        , color (rgb 250 80 80)
+        ]
+      , Global.class "highlight"
+        [ pointerEvents none
+        ]
       ]
 
 clickDecoder : (Int -> Msg) -> Json.Decoder Msg
@@ -489,8 +499,70 @@ clickDecoder msgCreator =
   Json.map msgCreator
     (Json.field "offsetX" (Json.int))
 
+
+createPerLineDict : List StyledFragment -> Dict Int (List StyledFragment)
+createPerLineDict fragments =
+    fragments
+      |> List.foldl addFragmentToDict Dict.empty
+
+addFragmentToDict : StyledFragment -> Dict Int (List StyledFragment) -> Dict Int (List StyledFragment)
+addFragmentToDict fragment dict =
+    dict
+      |> Dict.update (startLine fragment) (addToDictList fragment)
+      |> (\x -> if startLine fragment == endLine fragment then x else Dict.update (endLine fragment) (addToDictList fragment) x)
+
+addToDictList : StyledFragment -> Maybe (List StyledFragment) -> Maybe (List StyledFragment)
+addToDictList fragment mList =
+    case mList of
+      Nothing -> Just [fragment]
+      Just list -> Just (fragment :: list)
+
+--normalizeLineFragments : Int -> String -> List StyledFragment -> List StyledFragment
+--normalizeLineFragments lineNum line fragments =
+--    fragments
+--      |> List.map (\f -> { f | from = normalizeFromPos lineNum f.from, to = normalizeToPos lineNum line f.to })
+--      |> List.sortBy startCol
+--      |> normalizeLineFragmentsLoop
+
+--normalizeFromPos : Int -> (Int, Int) -> (Int, Int)
+--normalizeFromPos lineNum (line, col) =
+--  (lineNum, if line < lineNum then 0 else max 0 col)
+--
+--normalizeToPos : Int -> String -> (Int, Int) -> (Int, Int)
+--normalizeToPos lineNum lineStr (line, col) =
+--  let
+--    lineLen = String.length lineStr
+--  in
+--  (lineNum, if line > lineNum then lineLen else min lineLen col)
+
+normalizeLineFragmentsLoop : List StyledFragment -> List StyledFragment
+normalizeLineFragmentsLoop startOrdered =
+  case startOrdered of
+    [] -> []
+    [last] -> [last]
+    first :: second :: xs -> { first | to = (endLine first, min (endCol first) (startCol second)) } :: normalizeLineFragmentsLoop (second :: xs)
+
+startCol : StyledFragment -> Int
+startCol =
+  Tuple.second << .from
+
+endCol : StyledFragment -> Int
+endCol =
+  Tuple.second << .to
+
+startLine : StyledFragment -> Int
+startLine =
+  Tuple.first << .from
+
+endLine : StyledFragment -> Int
+endLine =
+  Tuple.first << .to
+
 viewEditor : Model -> Html Msg
 viewEditor model =
+    let
+      fragmentsDict = createPerLineDict (Result.withDefault [] <| Parser.run model.highlighter model.textValue)
+    in
     div
         [ css
             [ whiteSpace noWrap
@@ -517,10 +589,10 @@ viewEditor model =
         :: viewSelectionOverlay model
         :: [div [] ( model.textValue
             |> String.lines
-            |> List.indexedMap (Lazy.lazy2 viewEditorLineWithCaret)
+            |> List.indexedMap (\i str -> viewEditorLineWithCaret i str (Maybe.withDefault [] <| Dict.get (i + 1) fragmentsDict))
             |> (\lst ->
                 if List.isEmpty lst
-                  then [viewEditorLineWithCaret 0 ""]
+                  then [viewEditorLineWithCaret 0 "" []]
                   else lst))]
 
 viewPositionedCaret : Model -> Html Msg
@@ -532,6 +604,7 @@ viewPositionedCaret model =
           , top <| px (toFloat <| lineHeightConst * model.caretPosition.line)
           , left <| px (countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column))
           , pointerEvents none
+          , zIndex (int caretZIndex)
           ]
       ]
       [ caret
@@ -613,8 +686,8 @@ type alias ViewLineParams =
   , isLastLine : Bool
   }
 
-viewEditorLineWithCaret : Int -> String -> Html Msg
-viewEditorLineWithCaret lineNumber lineContent =
+viewEditorLineWithCaret : Int -> String -> List StyledFragment -> Html Msg
+viewEditorLineWithCaret lineNumber lineContent fragments =
     div
       [ id <| "line " ++ String.fromInt lineNumber
       , class "line"
@@ -627,9 +700,30 @@ viewEditorLineWithCaret lineNumber lineContent =
       , style "right" "0"
       , style "contain" "style size layout"
       ]
-      [ viewLineNumber lineNumber
-      , text lineContent
-      ]
+      (viewLineNumber lineNumber
+      :: viewLineContent 0 lineContent fragments
+      )
+
+viewLineContent : Int -> String -> List StyledFragment -> List (Html Msg)
+viewLineContent index str normalizedFragments =
+    case (normalizedFragments, index >= String.length str) of
+      (_, True) ->
+        []
+      ([], _) ->
+        [text <| String.slice index (String.length str) str]
+      (fr :: restFrs, _) ->
+        if startCol fr - 1 > index
+          then
+            text (String.slice index (startCol fr - 1) str) :: viewLineContent (startCol fr - 1) str (fr :: restFrs)
+          else
+            span
+              [ class ("highlight " ++ fr.class)
+              ]
+              [ text <| String.slice index (endCol fr - 1) str
+              ]
+              :: viewLineContent (endCol fr - 1) str restFrs
+
+
 
 --alwaysStopPropagation : String -> Msg -> Html.Styled.Attribute Msg
 --alwaysStopPropagation event msg =
@@ -678,13 +772,3 @@ caret =
     , id "caret-inner"
     , tabindex 0
     ] []
-
---keyword word =
---  span
---    [ css [ color <| rgb 242 151 5, whiteSpace preLine ] ]
---    [ word ]
---
---errored word =
---  span
---    [ css [ textDecoration3 underline wavy <| rgb 250 0 0 ] ]
---    [ word ]
