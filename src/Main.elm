@@ -10,6 +10,7 @@ import Dict exposing (Dict)
 import Html.Styled.Events exposing (on, onInput, preventDefaultOn)
 import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
 import Html.Styled.Attributes exposing (class, css, id, style, tabindex)
+import Html.Styled.Lazy exposing (lazy3)
 import Json.Decode as Json
 import KeyboardMsg exposing (KeyboardMsg(..), keyboardMsgDecoder)
 import List.Extra as EList exposing (dropWhile, last, takeWhile)
@@ -500,22 +501,22 @@ clickDecoder msgCreator =
     (Json.field "offsetX" (Json.int))
 
 
-createPerLineDict : List StyledFragment -> Dict Int (List StyledFragment)
-createPerLineDict fragments =
-    fragments
-      |> List.foldl addFragmentToDict Dict.empty
+--createPerLineDict : List StyledFragment -> Dict Int (List StyledFragment)
+--createPerLineDict fragments =
+--    fragments
+--      |> List.foldl addFragmentToDict Dict.empty
 
-addFragmentToDict : StyledFragment -> Dict Int (List StyledFragment) -> Dict Int (List StyledFragment)
-addFragmentToDict fragment dict =
-    dict
-      |> Dict.update (startLine fragment) (addToDictList fragment)
-      |> (\x -> if startLine fragment == endLine fragment then x else Dict.update (endLine fragment) (addToDictList fragment) x)
+--addFragmentToDict : StyledFragment -> Dict Int (List StyledFragment) -> Dict Int (List StyledFragment)
+--addFragmentToDict fragment dict =
+--    dict
+--      |> Dict.update (startLine fragment) (addToDictList fragment)
+--      |> (\x -> if startLine fragment == endLine fragment then x else Dict.update (endLine fragment) (addToDictList fragment) x)
 
-addToDictList : StyledFragment -> Maybe (List StyledFragment) -> Maybe (List StyledFragment)
-addToDictList fragment mList =
-    case mList of
-      Nothing -> Just [fragment]
-      Just list -> Just (fragment :: list)
+--addToDictList : StyledFragment -> Maybe (List StyledFragment) -> Maybe (List StyledFragment)
+--addToDictList fragment mList =
+--    case mList of
+--      Nothing -> Just [fragment]
+--      Just list -> Just (fragment :: list)
 
 --normalizeLineFragments : Int -> String -> List StyledFragment -> List StyledFragment
 --normalizeLineFragments lineNum line fragments =
@@ -560,9 +561,6 @@ endLine =
 
 viewEditor : Model -> Html Msg
 viewEditor model =
-    let
-      fragmentsDict = createPerLineDict (Result.withDefault [] <| Parser.run model.highlighter model.textValue)
-    in
     div
         [ css
             [ whiteSpace noWrap
@@ -589,10 +587,10 @@ viewEditor model =
         :: viewSelectionOverlay model
         :: [div [] ( model.textValue
             |> String.lines
-            |> List.indexedMap (\i str -> viewEditorLineWithCaret i str (Maybe.withDefault [] <| Dict.get (i + 1) fragmentsDict))
+            |> List.indexedMap (lazy3 viewEditorLineWithCaret model.highlighter)
             |> (\lst ->
                 if List.isEmpty lst
-                  then [viewEditorLineWithCaret 0 "" []]
+                  then [viewEditorLineWithCaret model.highlighter 0 ""]
                   else lst))]
 
 viewPositionedCaret : Model -> Html Msg
@@ -686,8 +684,14 @@ type alias ViewLineParams =
   , isLastLine : Bool
   }
 
-viewEditorLineWithCaret : Int -> String -> List StyledFragment -> Html Msg
-viewEditorLineWithCaret lineNumber lineContent fragments =
+viewEditorLineWithCaret : Parser (List StyledFragment) -> Int -> String -> Html Msg
+viewEditorLineWithCaret parser lineNumber lineContent =
+    let
+      fragments =
+        Parser.run parser lineContent
+          |> Result.withDefault []
+          |> List.sortBy startCol
+    in
     div
       [ id <| "line " ++ String.fromInt lineNumber
       , class "line"
