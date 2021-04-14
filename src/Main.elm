@@ -34,7 +34,8 @@ main =
                 , undoStack = []
                 , redoStack = []
                 , charSize = 0
-                }, measureCharSize)
+                , viewport = { top = 0, left = 0, height = 100, width = 100 }
+                }, Cmd.batch [measureCharSize, measureViewport])
       , update = update
       , view = view >> toUnstyled
       , subscriptions = subscriptions
@@ -48,6 +49,17 @@ measureCharSize =
       (\result ->
         case result of
           Ok size -> CharMeasured size
+          Err err -> DebugFail <| Debug.toString err
+      )
+
+measureViewport : Cmd Msg
+measureViewport =
+  Dom.getViewportOf editorId
+    |> Task.map (\v -> { top = v.viewport.y, left = v.viewport.x, height = v.viewport.height, width = v.viewport.width })
+    |> Task.attempt
+      (\result ->
+        case result of
+          Ok v -> ViewportUpdated v
           Err err -> DebugFail <| Debug.toString err
       )
 
@@ -95,6 +107,7 @@ caretWidth = 2
 lineNumberMarginConst = 10
 lineNumberHorizontalPaddingConst = 5
 caretZIndex = 100
+editorId = "editor"
 
 
 -- MODEL
@@ -109,6 +122,7 @@ type Msg
       | None
       | DebugFail String
       | CharMeasured Float
+      | ViewportUpdated ViewportInfo
 
 type alias Model =
   { textValue : String
@@ -120,6 +134,14 @@ type alias Model =
   , undoStack : UndoStack
   , redoStack : RedoStack
   , charSize : Float
+  , viewport : ViewportInfo
+  }
+
+type alias ViewportInfo =
+  { top : Float
+  , left : Float
+  , height : Float
+  , width : Float
   }
 
 type alias StyledFragment =
@@ -143,7 +165,10 @@ update msg model =
     case msg of
         TextChangedTestArea text -> ({ model | textValue = text }, Cmd.none)
         KeyboardMsgWrapper keyMsg ->
-          (updateAfterKeyboardMsg keyMsg model, scrollToCaretIfNeeded)
+          let
+            newModel = updateAfterKeyboardMsg keyMsg model
+          in
+          (newModel, scrollToCaretIfNeeded newModel)
         None -> (model, Cmd.none)
         DebugFail error -> ({ model | textValue = error }, Cmd.none)
         SelectionStarted line x ->
@@ -156,9 +181,10 @@ update msg model =
           if model.isSelectionInProgress
             then
               let
-                position = convertClickedPosToCaretPos model { x = x, y = line}
+                position = convertClickedPosToCaretPos model { x = x, y = line }
+                newModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model
               in
-              (applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model, scrollToCaretIfNeeded)
+              (newModel, scrollToCaretIfNeeded newModel)
             else
               (model, Cmd.none)
         SelectionFinished line x ->
@@ -176,6 +202,8 @@ update msg model =
               (model, Cmd.none)
         CharMeasured size ->
           ({ model | charSize = size }, Cmd.none)
+        ViewportUpdated viewport ->
+          ({ model | viewport = viewport }, Cmd.none)
 
 updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
@@ -318,80 +346,84 @@ applyChangeWithUndo change model =
       |> applyChangeToUndoStack change
       |> applyChange change
 
-shouldMoveLeft : Element -> Bool
-shouldMoveLeft el =
-    el.element.x - el.viewport.x < viewportCaretPadding
+type alias CaretPixelPosition =
+  { x : Float
+  , y : Float
+  }
 
-shouldMoveRight : Element -> Bool
-shouldMoveRight el =
-    el.element.x - el.viewport.x > el.viewport.width - viewportCaretPadding - caretWidth
+shouldMoveLeft : ViewportInfo -> CaretPixelPosition -> Bool
+shouldMoveLeft viewport caretPos =
+    caretPos.x - viewport.left < viewportCaretPadding
 
-shouldMoveUp : Element -> Bool
-shouldMoveUp el =
-    el.element.y - el.viewport.y < viewportCaretPadding
+shouldMoveRight : ViewportInfo -> CaretPixelPosition -> Bool
+shouldMoveRight viewport caretPos =
+    caretPos.x - viewport.left > viewport.width - viewportCaretPadding - caretWidth
 
-shouldMoveDown : Element -> Bool
-shouldMoveDown el =
-    el.element.y - el.viewport.y > el.viewport.height - viewportCaretPadding
+shouldMoveUp : ViewportInfo -> CaretPixelPosition -> Bool
+shouldMoveUp viewport caretPos =
+    caretPos.y - viewport.top < viewportCaretPadding && viewport.top > 0
 
-findNewX : Element -> Float
-findNewX el =
-  if not (shouldMoveLeft el || shouldMoveRight el)
+shouldMoveDown : ViewportInfo -> CaretPixelPosition -> Bool
+shouldMoveDown viewport caretPos =
+    caretPos.y - viewport.top > viewport.height - viewportCaretPadding
+
+findNewX : ViewportInfo -> CaretPixelPosition -> Float
+findNewX viewport caretPos =
+  if not (shouldMoveLeft viewport caretPos || shouldMoveRight viewport caretPos)
     then
-      el.viewport.x
+      viewport.left
     else
-      if shouldMoveLeft el
-        then el.element.x - viewportCaretPadding - viewportOverMoveToCaretMargin + caretWidth
-        else el.element.x - el.viewport.width + viewportCaretPadding + viewportOverMoveToCaretMargin
+      if shouldMoveLeft viewport caretPos
+        then caretPos.x - viewportCaretPadding - viewportOverMoveToCaretMargin + caretWidth
+        else caretPos.x - viewport.width + viewportCaretPadding + viewportOverMoveToCaretMargin
 
-findNewY : Element -> Float
-findNewY el =
-  if not (shouldMoveUp el || shouldMoveDown el)
+findNewY : ViewportInfo -> CaretPixelPosition -> Float
+findNewY viewport caretPos =
+  if not (shouldMoveUp viewport caretPos || shouldMoveDown viewport caretPos)
     then
-      el.viewport.y
+      viewport.top
     else
-      if shouldMoveUp el
-        then el.element.y - viewportCaretPadding - viewportOverMoveToCaretMargin
-        else el.element.y - el.viewport.height + viewportCaretPadding + viewportOverMoveToCaretMargin
+      if shouldMoveUp viewport caretPos
+        then caretPos.y - viewportCaretPadding - viewportOverMoveToCaretMargin
+        else caretPos.y - viewport.height + viewportCaretPadding + viewportOverMoveToCaretMargin
 
-shouldMove : Element -> Bool
-shouldMove el =
-    shouldMoveLeft el || shouldMoveRight el || shouldMoveUp el || shouldMoveDown el
+shouldMove : ViewportInfo -> CaretPixelPosition -> Bool
+shouldMove viewport caretPos =
+    shouldMoveLeft viewport caretPos ||
+    shouldMoveRight viewport caretPos ||
+    shouldMoveUp viewport caretPos ||
+    shouldMoveDown viewport caretPos
 
-moveViewportIfNecessary : Element -> Task.Task Dom.Error ()
-moveViewportIfNecessary el =
-    if shouldMove el
-      then Dom.setViewportOf "editor" (findNewX el) (findNewY el)
-      else Task.succeed ()
+type ViewportUpdateResult
+  = Updated ViewportInfo
+  | NotUpdated
 
-createRelativeElement : { element: Element, viewport: Dom.Viewport, viewportElement: Element } -> Element
-createRelativeElement { element, viewport, viewportElement } =
-    let
-      elem = element.element
-    in
-    { scene = viewport.scene
-    , viewport = viewport.viewport
-    , element =
-        { elem
-        | x = elem.x - viewportElement.element.x + viewport.viewport.x
-        , y = elem.y - viewportElement.element.y + viewport.viewport.y
-        }
-    }
+moveViewportIfNecessary : ViewportInfo -> CaretPixelPosition -> Task.Task Dom.Error ViewportUpdateResult
+moveViewportIfNecessary viewport caretPos =
+    if shouldMove viewport caretPos
+      then
+        let
+          newX = findNewX viewport caretPos
+          newY = findNewY viewport caretPos
+        in
+        Dom.setViewportOf editorId newX newY
+          |> Task.map (always <| Updated { viewport | left = newX, top = newY })
+      else
+        Task.succeed NotUpdated
 
-scrollToCaretIfNeeded : Cmd Msg
-scrollToCaretIfNeeded =
-    Task.map3
-      (\element viewport editor -> createRelativeElement { element = element, viewport = viewport, viewportElement = editor })
-      (Dom.getElement "caret-inner")
-      (Dom.getViewportOf "editor")
-      (Dom.getElement "editor")
-      |> Task.andThen moveViewportIfNecessary
-      |> Task.attempt (always None)
-      --|> Task.attempt (\result ->
-      --                    case result of
-      --                      Ok _ -> Debug.log "successful task" None
-      --                      Err err -> DebugFail <| Debug.toString err
-      --                )
+scrollToCaretIfNeeded : Model -> Cmd Msg
+scrollToCaretIfNeeded model =
+  let
+    caretX = countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column)
+    caretY = toFloat <| lineHeightConst * model.caretPosition.line
+  in
+  moveViewportIfNecessary model.viewport (CaretPixelPosition caretX caretY)
+    |> Task.attempt (\result ->
+                        case result of
+                          Ok (Updated newViewport) -> ViewportUpdated newViewport
+                          Ok NotUpdated -> None
+                          Err err -> DebugFail <| Debug.toString err
+                    )
 
 
 -- SUBSCRIPTIONS
@@ -500,6 +532,14 @@ clickDecoder msgCreator =
   Json.map msgCreator
     (Json.field "offsetX" (Json.int))
 
+scrollDecoder : (ViewportInfo -> Msg) -> Json.Decoder Msg
+scrollDecoder msgCreator =
+  Json.map4 (\top left height width -> msgCreator { top = top, left = left, height = height, width = width })
+    (Json.field "scrollTop" Json.float)
+    (Json.field "scrollLeft" Json.float)
+    (Json.field "clientHeight" Json.float)
+    (Json.field "clientWidth" Json.float)
+
 
 --createPerLineDict : List StyledFragment -> Dict Int (List StyledFragment)
 --createPerLineDict fragments =
@@ -562,24 +602,26 @@ endLine =
 viewEditor : Model -> Html Msg
 viewEditor model =
     div
-        [ css
-            [ whiteSpace noWrap
-            , fontSize (px fontSizeConst)
-            , position relative
-            , focus [ backgroundColor (rgba 10 200 50 0.7) ]
-            , overflowX auto
-            , overflowY auto
-            , outline none
-            , fontFamily monospace
-            , boxSizing borderBox
-            , property "user-select" "none"
-            , cursor text_
-            , height (pct 100)
-            , width (pct 100)
-            ]
-          , preventDefaultOn "keydown" <| wrapKeyboardDecoder keyboardMsgDecoder
-          , tabindex 0
-        , id "editor"
+      [ css
+          [ whiteSpace noWrap
+          , fontSize (px fontSizeConst)
+          , position relative
+          , focus [ backgroundColor (rgba 10 200 50 0.7) ]
+          , overflowX auto
+          , overflowY auto
+          , outline none
+          , fontFamily monospace
+          , boxSizing borderBox
+          , property "user-select" "none"
+          , cursor text_
+          , height (pct 100)
+          , width (pct 100)
+          , property "contain" "size layout paint"
+          ]
+        , preventDefaultOn "keydown" <| wrapKeyboardDecoder keyboardMsgDecoder
+        , tabindex 0
+        , id editorId
+        , on "scroll" <| scrollDecoder ViewportUpdated
         ]
         <| viewCharSizeTest
         :: viewPredefinedStyles (List.length <| String.lines model.textValue)
@@ -702,7 +744,7 @@ viewEditorLineWithCaret parser lineNumber lineContent =
       , style "top" (String.fromInt (lineNumber * lineHeightConst) ++ "px")
       , style "left" "0"
       , style "right" "0"
-      , style "contain" "style size layout"
+      , style "contain" "size layout"
       ]
       (viewLineNumber lineNumber
       :: viewLineContent 0 lineContent fragments
