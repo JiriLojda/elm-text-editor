@@ -1,5 +1,5 @@
 module Main exposing (..)
-import Basics.Extra exposing (maxSafeInteger)
+import Basics.Extra exposing (flip, maxSafeInteger)
 import Browser
 import Browser.Dom as Dom exposing (Element)
 import Change exposing (Change(..), applyChange)
@@ -54,8 +54,8 @@ measureCharSize =
 
 measureViewport : Cmd Msg
 measureViewport =
-  Dom.getViewportOf editorId
-    |> Task.map (\v -> { top = v.viewport.y, left = v.viewport.x, height = v.viewport.height, width = v.viewport.width })
+  Dom.getElement editorId
+    |> Task.map (\v -> { top = 0, left = 0, height = v.element.height, width = v.element.width })
     |> Task.attempt
       (\result ->
         case result of
@@ -107,7 +107,15 @@ caretWidth = 2
 lineNumberMarginConst = 10
 lineNumberHorizontalPaddingConst = 5
 caretZIndex = 100
+layerSize = 1000000
+
+
+-- IDS
+
+
 editorId = "editor"
+verticalScrollbarId = "vertical-scrollbar-outer"
+horizontalScrollbarId = "horizontal-scrollbar-outer"
 
 
 -- MODEL
@@ -123,6 +131,8 @@ type Msg
       | DebugFail String
       | CharMeasured Float
       | ViewportUpdated ViewportInfo
+      | ViewportMovedTo Float Float
+      | ViewportMovedBy Float Float
 
 type alias Model =
   { textValue : String
@@ -168,7 +178,7 @@ update msg model =
           let
             newModel = updateAfterKeyboardMsg keyMsg model
           in
-          (newModel, scrollToCaretIfNeeded newModel)
+          scrollToCaretIfNeeded newModel
         None -> (model, Cmd.none)
         DebugFail error -> ({ model | textValue = error }, Cmd.none)
         SelectionStarted line x ->
@@ -184,7 +194,7 @@ update msg model =
                 position = convertClickedPosToCaretPos model { x = x, y = line }
                 newModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model
               in
-              (newModel, scrollToCaretIfNeeded newModel)
+              scrollToCaretIfNeeded newModel
             else
               (model, Cmd.none)
         SelectionFinished line x ->
@@ -204,6 +214,29 @@ update msg model =
           ({ model | charSize = size }, Cmd.none)
         ViewportUpdated viewport ->
           ({ model | viewport = viewport }, Cmd.none)
+        ViewportMovedTo left top ->
+          let
+            viewport = model.viewport
+          in
+          ({ model | viewport = { viewport | left = left, top = top } }, Cmd.none)
+        ViewportMovedBy left top ->
+          let
+            -- TODO: de-duplicate the content dimensions logic
+            lines = String.lines model.textValue
+            contentHeight = List.length lines * lineHeightConst
+            contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines + countLineNumberFullWidth model.textValue + 20
+            oldViewport = model.viewport
+            newLeft =
+              (oldViewport.left + left)
+                |> min (contentWidth - oldViewport.width)
+                |> max 0
+            newTop =
+              (oldViewport.top + top)
+                |> min (toFloat contentHeight - oldViewport.height)
+                |> max 0
+            newViewport = { oldViewport | left = newLeft, top = newTop }
+          in
+          ({ model | viewport = newViewport }, syncScrollbar newViewport)
 
 updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
 updateAfterKeyboardMsg msg model =
@@ -394,37 +427,38 @@ shouldMove viewport caretPos =
     shouldMoveUp viewport caretPos ||
     shouldMoveDown viewport caretPos
 
-type ViewportUpdateResult
-  = Updated ViewportInfo
-  | NotUpdated
 
-moveViewportIfNecessary : ViewportInfo -> CaretPixelPosition -> Task.Task Dom.Error ViewportUpdateResult
+moveViewportIfNecessary : ViewportInfo -> CaretPixelPosition -> ViewportInfo
 moveViewportIfNecessary viewport caretPos =
     if shouldMove viewport caretPos
       then
         let
-          newX = findNewX viewport caretPos
-          newY = findNewY viewport caretPos
+          newX = max 0 <| findNewX viewport caretPos
+          newY = max 0 <| findNewY viewport caretPos
         in
-        Dom.setViewportOf editorId newX newY
-          |> Task.map (always <| Updated { viewport | left = newX, top = newY })
+        { viewport | left = newX, top = newY }
       else
-        Task.succeed NotUpdated
+        viewport
 
-scrollToCaretIfNeeded : Model -> Cmd Msg
+syncScrollbar : ViewportInfo -> Cmd Msg
+syncScrollbar viewport =
+  let
+    syncHorizontalScrollbar = Dom.setViewportOf horizontalScrollbarId viewport.left 0
+  in
+  Dom.setViewportOf verticalScrollbarId 0 viewport.top
+    |> Task.andThen (always syncHorizontalScrollbar)
+    |> Task.onError (always syncHorizontalScrollbar)
+    |> Task.attempt (always None)
+
+
+scrollToCaretIfNeeded : Model -> (Model, Cmd Msg)
 scrollToCaretIfNeeded model =
   let
     caretX = countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column)
     caretY = toFloat <| lineHeightConst * model.caretPosition.line
+    newViewport = moveViewportIfNecessary model.viewport (CaretPixelPosition caretX caretY)
   in
-  moveViewportIfNecessary model.viewport (CaretPixelPosition caretX caretY)
-    |> Task.attempt (\result ->
-                        case result of
-                          Ok (Updated newViewport) -> ViewportUpdated newViewport
-                          Ok NotUpdated -> None
-                          Err err -> DebugFail <| Debug.toString err
-                    )
-
+  ({ model | viewport = newViewport }, if newViewport /= model.viewport then syncScrollbar newViewport else Cmd.none)
 
 -- SUBSCRIPTIONS
 
@@ -441,7 +475,7 @@ view model =
     div
       []
       [ br [] []
-      , viewTestArea model
+      --, viewTestArea model
       , div
         [ css
           [ height (px 300)
@@ -532,50 +566,6 @@ clickDecoder msgCreator =
   Json.map msgCreator
     (Json.field "offsetX" (Json.int))
 
-scrollDecoder : (ViewportInfo -> Msg) -> Json.Decoder Msg
-scrollDecoder msgCreator =
-  Json.map4 (\top left height width -> msgCreator { top = top, left = left, height = height, width = width })
-    (Json.field "scrollTop" Json.float)
-    (Json.field "scrollLeft" Json.float)
-    (Json.field "clientHeight" Json.float)
-    (Json.field "clientWidth" Json.float)
-
-
---createPerLineDict : List StyledFragment -> Dict Int (List StyledFragment)
---createPerLineDict fragments =
---    fragments
---      |> List.foldl addFragmentToDict Dict.empty
-
---addFragmentToDict : StyledFragment -> Dict Int (List StyledFragment) -> Dict Int (List StyledFragment)
---addFragmentToDict fragment dict =
---    dict
---      |> Dict.update (startLine fragment) (addToDictList fragment)
---      |> (\x -> if startLine fragment == endLine fragment then x else Dict.update (endLine fragment) (addToDictList fragment) x)
-
---addToDictList : StyledFragment -> Maybe (List StyledFragment) -> Maybe (List StyledFragment)
---addToDictList fragment mList =
---    case mList of
---      Nothing -> Just [fragment]
---      Just list -> Just (fragment :: list)
-
---normalizeLineFragments : Int -> String -> List StyledFragment -> List StyledFragment
---normalizeLineFragments lineNum line fragments =
---    fragments
---      |> List.map (\f -> { f | from = normalizeFromPos lineNum f.from, to = normalizeToPos lineNum line f.to })
---      |> List.sortBy startCol
---      |> normalizeLineFragmentsLoop
-
---normalizeFromPos : Int -> (Int, Int) -> (Int, Int)
---normalizeFromPos lineNum (line, col) =
---  (lineNum, if line < lineNum then 0 else max 0 col)
---
---normalizeToPos : Int -> String -> (Int, Int) -> (Int, Int)
---normalizeToPos lineNum lineStr (line, col) =
---  let
---    lineLen = String.length lineStr
---  in
---  (lineNum, if line > lineNum then lineLen else min lineLen col)
-
 normalizeLineFragmentsLoop : List StyledFragment -> List StyledFragment
 normalizeLineFragmentsLoop startOrdered =
   case startOrdered of
@@ -601,14 +591,21 @@ endLine =
 
 viewEditor : Model -> Html Msg
 viewEditor model =
+    let
+      lines = String.lines model.textValue
+      contentHeight = List.length lines * lineHeightConst
+      contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines + countLineNumberFullWidth model.textValue + 20 -- TODO remove the constant once the gutters are out
+      shouldViewVerticalScrollbar = toFloat contentHeight > model.viewport.height
+      shouldViewHorizontalScrollbar = contentWidth > model.viewport.width
+    in
     div
       [ css
           [ whiteSpace noWrap
           , fontSize (px fontSizeConst)
           , position relative
           , focus [ backgroundColor (rgba 10 200 50 0.7) ]
-          , overflowX auto
-          , overflowY auto
+          , overflowX hidden
+          , overflowY hidden
           , outline none
           , fontFamily monospace
           , boxSizing borderBox
@@ -618,22 +615,114 @@ viewEditor model =
           , width (pct 100)
           , property "contain" "size layout paint"
           ]
-        , preventDefaultOn "keydown" <| wrapKeyboardDecoder keyboardMsgDecoder
-        , tabindex 0
-        , id editorId
-        , on "scroll" <| scrollDecoder ViewportUpdated
+      , preventDefaultOn "keydown" <| wrapKeyboardDecoder keyboardMsgDecoder
+      , tabindex 0
+      , id editorId
+      ]
+      [ viewCharSizeTest
+      , viewPredefinedStyles (List.length <| String.lines model.textValue)
+      , viewContent model
+      , if shouldViewVerticalScrollbar
+          then viewVerticalScrollbar contentHeight shouldViewHorizontalScrollbar model.viewport.left
+          else div [] []
+      , if shouldViewHorizontalScrollbar
+          then viewHorizontalScrollbar contentWidth shouldViewVerticalScrollbar model.viewport.top
+          else div [] []
+      ]
+
+scrollTopDecoder : (Float -> Msg) -> Json.Decoder Msg
+scrollTopDecoder msgCreator =
+  Json.map msgCreator
+    (Json.at ["target", "scrollTop"] Json.float)
+
+scrollLeftDecoder : (Float -> Msg) -> Json.Decoder Msg
+scrollLeftDecoder msgCreator =
+  Json.map msgCreator
+    (Json.at ["target", "scrollLeft"] Json.float)
+
+viewVerticalScrollbar : Int -> Bool -> Float -> Html Msg
+viewVerticalScrollbar contentHeight areBothScrollbarsPresent scrollLeft =
+  div
+    [ id verticalScrollbarId
+    , style "position" "absolute"
+    , style "top" "0"
+    , style "bottom" <| if areBothScrollbarsPresent then "11px" else "0px"
+    , style "right" "0"
+    , style "overflow-x" "hidden"
+    , style "overflow-y" "scroll"
+    , style "cursor" "text"
+    , on "scroll" (scrollTopDecoder <| ViewportMovedTo scrollLeft)
+    ]
+    [ div
+        [ id "vertical-scrollbar-inner"
+        , style "min-width" "1px"
+        , style "height" (String.fromInt contentHeight ++ "px")
+        , on "scroll" (scrollTopDecoder <| ViewportMovedTo scrollLeft)
         ]
-        <| viewCharSizeTest
-        :: viewPredefinedStyles (List.length <| String.lines model.textValue)
-        :: viewPositionedCaret model
-        :: viewSelectionOverlay model
-        :: [div [] ( model.textValue
-            |> String.lines
-            |> List.indexedMap (lazy3 viewEditorLineWithCaret model.highlighter)
-            |> (\lst ->
-                if List.isEmpty lst
-                  then [viewEditorLineWithCaret model.highlighter 0 ""]
-                  else lst))]
+        [
+        ]
+    ]
+
+
+viewHorizontalScrollbar : Float -> Bool -> Float -> Html Msg
+viewHorizontalScrollbar contentWidth areBothScrollbarsPresent scrollTop =
+  div
+    [ id horizontalScrollbarId
+    , style "position" "absolute"
+    , style "left" "0"
+    , style "right" <| if areBothScrollbarsPresent then "11px" else "0px"
+    , style "bottom" "0"
+    , style "overflow-y" "hidden"
+    , style "overflow-x" "scroll"
+    , style "cursor" "text"
+    , on "scroll" (scrollLeftDecoder <| flip ViewportMovedTo scrollTop)
+    ]
+    [ div
+        [ id "horizontal-scrollbar-inner"
+        , style "min-height" "1px"
+        , style "width" (String.fromFloat contentWidth ++ "px")
+        ]
+        [
+        ]
+    ]
+
+wheelDecoder : (Float -> Float -> Msg) -> Json.Decoder Msg
+wheelDecoder msgCreator =
+  Json.map2 msgCreator
+    (Json.field "deltaX" Json.float)
+    (Json.field "deltaY" Json.float)
+
+viewContent : Model -> Html Msg
+viewContent model =
+  div
+    [ css
+      [ position absolute
+      , top (px 0)
+      , bottom (px 0)
+      , left (px 0)
+      , right (px 0)
+      , overflow hidden
+      , property "contain" "size layout"
+      ]
+    , id "viewport"
+    , on "wheel" (wheelDecoder ViewportMovedBy)
+    ]
+    [ div
+        [ css
+          [ position absolute
+          , top (px (model.viewport.top * -1))
+          , left (px (model.viewport.left * -1))
+          , height (px layerSize)
+          , width (px layerSize)
+          , property "contain" "size layout"
+          ]
+        , id "content"
+        ]
+        [ viewTextLayer model
+        , viewPositionedCaret model
+        , viewSelectionOverlay model
+        ]
+    ]
 
 viewPositionedCaret : Model -> Html Msg
 viewPositionedCaret model =
@@ -716,6 +805,32 @@ viewCharSizeTest =
     ]
     [ text "mmmmmmmmmmiiiiiiiiiioooooooooowwwwwwwwwwlllllllllljjjjjjjjjj"
     ]
+
+viewTextLayer : Model -> Html Msg
+viewTextLayer model =
+  let
+    viewportStartLine = floor model.viewport.top // lineHeightConst
+    viewportLineCount = ceiling model.viewport.height // lineHeightConst + 5
+  in
+  div
+    [ css
+      [ position absolute
+      , top (px 0)
+      , left (px 0)
+      , height (px layerSize)
+      , width (px layerSize)
+      , property "contain" "size layout"
+      ]
+    , id "textLayer"
+    ]
+    <| ( model.textValue
+          |> String.lines
+          |> (List.take viewportLineCount << List.drop viewportStartLine)
+          |> List.indexedMap (\i l -> lazy3 viewEditorLineWithCaret model.highlighter (i + viewportStartLine) l)
+          |> (\lst ->
+              if List.isEmpty lst
+                then [viewEditorLineWithCaret model.highlighter 0 ""]
+                else lst))
 
 type alias ViewLineParams =
   { isSelectionInProgress : Bool
