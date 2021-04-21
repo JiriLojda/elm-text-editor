@@ -8,11 +8,11 @@
   },
   "scripts": {
     "test": "elm-test",
-    "watch": "chokidar \"**/*.elm\" \"index.html\" -c \"elm make src/Main.elm --output=generated/elm.js\" --initial",
-    "watch-dev": "chokidar \"**/*.elm\" \"index.html\" -c \"elm make src/Main.elm --output=generated/elm.js --debug\" --initial",
-    "make": "elm make src/Main.elm --output=generated/elm.js",
-    "make-dev": "elm make src/Main.elm --output=generated/elm.js --debug",
-    "optimize": "elm make src/Main.elm --output=generated/elm.js --optimize"
+    "watch": "chokidar \"**/*.elm\" \"index.html\" -c \"elm make src/Playground.elm --output=generated/elm.js\" --initial",
+    "watch-dev": "chokidar \"**/*.elm\" \"index.html\" -c \"elm make src/Playground.elm --output=generated/elm.js --debug\" --initial",
+    "make": "elm make src/Playground.elm --output=generated/elm.js",
+    "make-dev": "elm make src/Playground.elm --output=generated/elm.js --debug",
+    "optimize": "elm make src/Playground.elm --output=generated/elm.js --optimize"
   },
   "author": "Jiri Lojda",
   "license": "ISC",

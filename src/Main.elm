@@ -1,4 +1,4 @@
-module Main exposing (..)
+module Main exposing (init, update, view, Msg, Model, StyledFragment)
 import Basics.Extra exposing (flip, maxSafeInteger)
 import Browser
 import Browser.Dom as Dom exposing (Element)
@@ -21,25 +21,20 @@ import CaretPosition as Pos exposing (CaretPosition)
 import Selection as Sel exposing (Selection)
 import Undo exposing (RedoStack, UndoStack, applyChangeToUndoStack, redoLastBatch, undoLastBatch)
 
-main : Program () Model Msg
-main =
-    Browser.element
-      { init = always (
-                { textValue = "empty"
-                , isSelectionInProgress = False
-                , caretPosition = CaretPosition 0 0
-                , selection = Nothing
-                , highlighter = testParser
-                , clipboard = ""
-                , undoStack = []
-                , redoStack = []
-                , charSize = 0
-                , viewport = { top = 0, left = 0, height = 100, width = 100 }
-                }, Cmd.batch [measureCharSize, measureViewport])
-      , update = update
-      , view = view >> toUnstyled
-      , subscriptions = subscriptions
-      }
+init : Parser (List StyledFragment) -> flags -> (Model, Cmd Msg)
+init highlighter =
+  always (
+   { textValue = "empty"
+   , isSelectionInProgress = False
+   , caretPosition = CaretPosition 0 0
+   , selection = Nothing
+   , highlighter = highlighter
+   , clipboard = ""
+   , undoStack = []
+   , redoStack = []
+   , charSize = 0
+   , viewport = { top = 0, left = 0, height = 100, width = 100 }
+   }, Cmd.batch [measureCharSize, measureViewport])
 
 measureCharSize : Cmd Msg
 measureCharSize =
@@ -62,38 +57,6 @@ measureViewport =
           Ok v -> ViewportUpdated v
           Err err -> DebugFail <| Debug.toString err
       )
-
-testParser =
-  Parser.loop [] testParserStep
-
-type alias Located a =
-  { from : (Int, Int)
-  , value : a
-  , to : (Int, Int)
-  }
-
-located : Parser a -> Parser { from : (Int, Int), to : (Int, Int), value: a }
-located parser =
-  Parser.succeed Located
-    |= Parser.getPosition
-    |= parser
-    |= Parser.getPosition
-
-parseToken : String -> String -> List StyledFragment -> Parser (Parser.Step (List StyledFragment) (List StyledFragment))
-parseToken token class tmpResults =
-  located (Parser.succeed class |. Parser.token token)
-    |> Parser.map (\found -> Parser.Loop <| StyledFragment found.from class found.to :: tmpResults)
-
-testParserStep : List StyledFragment -> Parser (Parser.Step (List StyledFragment) (List StyledFragment))
-testParserStep results =
-  Parser.oneOf
-    [ parseToken "lol" "test-keyword" results
-    , parseToken "lolz" "test-error" results
-    , Parser.end |> Parser.map (always <| Parser.Done results)
-    , Parser.chompIf (always True)
-      |> Parser.map (always <| Parser.Loop results)
-    ]
-
 
 -- CONSTANTS
 
@@ -470,31 +433,6 @@ subscriptions _ =
 -- VIEW
 
 
-view : Model -> Html Msg
-view model =
-    div
-      []
-      [ br [] []
-      --, viewTestArea model
-      , div
-        [ css
-          [ height (px 300)
-          , width (px 400)
-          , marginLeft (px 50)
-          ]
-        ]
-        [ viewEditor model
-        ]
-      ]
-
-viewTestArea model =
-  textarea
-    [ onInput TextChangedTestArea
-    , css [ width <| px 100, height <| px 100, backgroundColor <| rgb 100 200 0 ]
-    ]
-    [ text model.textValue
-    ]
-
 wrapKeyboardDecoder : Json.Decoder KeyboardMsg -> Json.Decoder (Msg, Bool)
 wrapKeyboardDecoder = Json.map (\msg -> (KeyboardMsgWrapper msg, True))
 
@@ -589,8 +527,8 @@ endLine : StyledFragment -> Int
 endLine =
   Tuple.first << .to
 
-viewEditor : Model -> Html Msg
-viewEditor model =
+view : Model -> Html Msg
+view model =
     let
       lines = String.lines model.textValue
       contentHeight = List.length lines * lineHeightConst
