@@ -54,7 +54,7 @@ measureCharSize =
 
 measureViewport : Cmd Msg
 measureViewport =
-  Dom.getElement editorId
+  Dom.getElement viewportId
     |> Task.map (\v -> { top = 0, left = 0, height = v.element.height, width = v.element.width })
     |> Task.attempt
       (\result ->
@@ -81,6 +81,7 @@ layerSize = 1000000
 
 
 editorId = "editor"
+viewportId = "viewport"
 verticalScrollbarId = "vertical-scrollbar-outer"
 horizontalScrollbarId = "horizontal-scrollbar-outer"
 
@@ -218,7 +219,7 @@ update msg (Model model) =
             -- TODO: de-duplicate the content dimensions logic
             lines = String.lines model.textValue
             contentHeight = toFloat (List.length lines) * model.theme.lineHeight
-            contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines + countLineNumberFullWidth model.textValue + 20
+            contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines
             oldViewport = model.viewport
             newLeft =
               (oldViewport.left + left)
@@ -346,9 +347,8 @@ updateAfterKeyboardMsg msg model =
 convertClickedPosToCaretPos : ModelInner -> { x : Int, y: Int } -> CaretPosition
 convertClickedPosToCaretPos model { x, y } =
   let
-    lineNumberFullWidth = countLineNumberFullWidth model.textValue
     lines = String.lines model.textValue
-    clickedXIndex = floor ((toFloat x - lineNumberFullWidth) / model.charSize)
+    clickedXIndex = floor (toFloat x / model.charSize)
     clickedLineIndex = min (List.length lines - 1) y
     clickedLine =
       lines
@@ -356,16 +356,6 @@ convertClickedPosToCaretPos model { x, y } =
         |> Maybe.withDefault ""
   in
   CaretPosition (min (String.length clickedLine) clickedXIndex) clickedLineIndex
-
-
-countLineNumberFullWidth : String -> Float
-countLineNumberFullWidth textValue =
-    textValue
-      |> String.lines
-      |> List.length
-      |> max 1
-      |> countLineNumberWidth
-      |> (+) lineNumberMarginConst
 
 applyChangeWithUndo : Change -> ModelInner -> ModelInner
 applyChangeWithUndo change model =
@@ -448,7 +438,7 @@ syncScrollbar viewport =
 scrollToCaretIfNeeded : ModelInner -> (Model, Cmd Msg)
 scrollToCaretIfNeeded model =
   let
-    caretX = countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column)
+    caretX = model.charSize * toFloat model.caretPosition.column
     caretY = model.theme.lineHeight * toFloat model.caretPosition.line
     newViewport = moveViewportIfNecessary model.viewport (CaretPixelPosition caretX caretY) model.theme.caretWidth
   in
@@ -467,21 +457,11 @@ subscriptions _ =
 wrapKeyboardDecoder : Json.Decoder KeyboardMsg -> Json.Decoder (Msg, Bool)
 wrapKeyboardDecoder = Json.map (\msg -> (KeyboardMsgWrapper msg, True))
 
-countDigits : Int -> Int
-countDigits number =
-    if number > 0
-      then 1 + countDigits (number // 10)
-      else 0
-
-countLineNumberWidth : Int -> Float
-countLineNumberWidth linesNumber =
-    toFloat (10 + countDigits (max 1 linesNumber) * 10)
-
 viewPredefinedStyles : Int -> Float -> Html Msg
 viewPredefinedStyles linesNumber lineHeightValue =
-    let
-      lineNumberWidth = countLineNumberWidth linesNumber
-    in
+    --let
+    --  lineNumberWidth = countLineNumberWidth linesNumber
+    --in
     global
       [ Global.class "line"
         [ minHeight (px lineHeightValue)
@@ -502,17 +482,17 @@ viewPredefinedStyles linesNumber lineHeightValue =
         [ height (pct 100)
         , position relative
         ]
-      , Global.class "line-number"
-        [ height (pct 100)
-        , maxWidth (px lineNumberWidth)
-        , minWidth (px lineNumberWidth)
-        , backgroundColor (rgb 0 0 200)
-        , color (rgb 250 250 250)
-        , marginRight (px lineNumberMarginConst)
-        , paddingLeft (px lineNumberHorizontalPaddingConst)
-        , paddingRight (px lineNumberHorizontalPaddingConst)
-        , boxSizing borderBox
-        ]
+      --, Global.class "line-number"
+      --  [ height (pct 100)
+      --  --, maxWidth (px lineNumberWidth)
+      --  --, minWidth (px lineNumberWidth)
+      --  , backgroundColor (rgb 0 0 200)
+      --  , color (rgb 250 250 250)
+      --  , marginRight (px lineNumberMarginConst)
+      --  , paddingLeft (px lineNumberHorizontalPaddingConst)
+      --  , paddingRight (px lineNumberHorizontalPaddingConst)
+      --  , boxSizing borderBox
+      --  ]
       , Global.class "line-selection"
         [ backgroundColor (rgb 2 190 224)
         , property "mix-blend-mode" "hue"
@@ -560,13 +540,6 @@ endLine =
 
 view : Model -> Html Msg
 view (Model model) =
-    let
-      lines = String.lines model.textValue
-      contentHeight = toFloat (List.length lines) * model.theme.lineHeight
-      contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines + countLineNumberFullWidth model.textValue + 20 -- TODO remove the constant once the gutters are out
-      shouldViewVerticalScrollbar = contentHeight > model.viewport.height
-      shouldViewHorizontalScrollbar = contentWidth > model.viewport.width
-    in
     div
       ([ css
           [ whiteSpace noWrap
@@ -590,13 +563,7 @@ view (Model model) =
       ] ++ applyStyle "" model.theme.root)
       [ viewCharSizeTest
       , viewPredefinedStyles (List.length <| String.lines model.textValue) model.theme.lineHeight
-      , viewContent model
-      , if shouldViewVerticalScrollbar
-          then viewVerticalScrollbar contentHeight shouldViewHorizontalScrollbar model.viewport.left
-          else div [] []
-      , if shouldViewHorizontalScrollbar
-          then viewHorizontalScrollbar contentWidth shouldViewVerticalScrollbar model.viewport.top
-          else div [] []
+      , viewContentWithGutters model
       ]
 
 scrollTopDecoder : (Float -> Msg) -> Json.Decoder Msg
@@ -655,25 +622,103 @@ viewHorizontalScrollbar contentWidth areBothScrollbarsPresent scrollTop =
         ]
     ]
 
+countDigits : Int -> Int
+countDigits number =
+    if number > 0
+      then 1 + countDigits (number // 10)
+      else 0
+
+countLineNumberWidth : Int -> Float
+countLineNumberWidth linesNumber =
+    toFloat (10 + countDigits (max 1 linesNumber) * 10) -- TODO: make modifiable through theme
+
+countLineNumberFullWidth : String -> Float
+countLineNumberFullWidth textValue =
+    textValue
+      |> String.lines
+      |> List.length
+      |> max 1
+      |> countLineNumberWidth
+      |> (+) lineNumberMarginConst
+
+viewContentWithGutters : ModelInner -> Html Msg
+viewContentWithGutters model =
+  let
+    guttersWidth = countLineNumberFullWidth model.textValue
+  in
+  div
+    [ style "position" "absolute"
+    , style "top" "0"
+    , style "bottom" "0"
+    , style "left" "0"
+    , style "right" "0"
+    , style "overflow" "hidden"
+    ]
+    [ viewGutters guttersWidth model
+    , viewContent guttersWidth model
+    ]
+
+viewGutters : Float -> ModelInner -> Html Msg
+viewGutters guttersWidth model =
+  let
+    lines = String.lines model.textValue
+    viewportStartLine = floor <| model.viewport.top / model.theme.lineHeight
+    viewportLineCount = ceiling <| model.viewport.height / model.theme.lineHeight + 5
+  in
+  div
+    [ style "top" "0px"
+    , style "left" "0px"
+    , style "width" (String.fromFloat guttersWidth ++ "px")
+    , style "background-color" "#99d01f"
+    , style "position" "absolute"
+    , style "bottom" "0px"
+    ]
+    <| (
+      lines
+        |> (List.take viewportLineCount << List.drop viewportStartLine)
+        |> List.indexedMap (\i _ -> viewLineNumberNew model.theme.lineHeight (toFloat (i) * model.theme.lineHeight) (i + viewportStartLine))
+    )
+
+viewLineNumberNew : Float -> Float -> Int -> Html Msg
+viewLineNumberNew lineHeight topOffset num =
+  div
+    [ style "display" "flex"
+    , style "width" "100%"
+    , style "justify-content" "center"
+    , style "height" (String.fromFloat lineHeight ++ "px")
+    , style "position" "absolute"
+    , style "top" (String.fromFloat topOffset ++ "px")
+    , style "left" "0px"
+    ]
+    [ text <| String.fromInt num
+    ]
+
 wheelDecoder : (Float -> Float -> Msg) -> Json.Decoder Msg
 wheelDecoder msgCreator =
   Json.map2 msgCreator
     (Json.field "deltaX" Json.float)
     (Json.field "deltaY" Json.float)
 
-viewContent : ModelInner -> Html Msg
-viewContent model =
+viewContent : Float -> ModelInner -> Html Msg
+viewContent leftOffset model =
+  let
+    lines = String.lines model.textValue
+    contentHeight = toFloat (List.length lines) * model.theme.lineHeight
+    contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines -- TODO remove the constant once the gutters are out
+    shouldViewVerticalScrollbar = contentHeight > model.viewport.height
+    shouldViewHorizontalScrollbar = contentWidth > model.viewport.width
+  in
   div
     [ css
       [ position absolute
       , top (px 0)
       , bottom (px 0)
-      , left (px 0)
+      , left (px leftOffset)
       , right (px 0)
       , overflow hidden
       , property "contain" "size layout"
       ]
-    , id "viewport"
+    , id viewportId
     , on "wheel" (wheelDecoder ViewportMovedBy)
     ]
     [ div
@@ -691,6 +736,12 @@ viewContent model =
         , viewPositionedCaret model
         , viewSelectionOverlay model
         ]
+    , if shouldViewVerticalScrollbar
+        then viewVerticalScrollbar contentHeight shouldViewHorizontalScrollbar model.viewport.left
+        else div [] []
+    , if shouldViewHorizontalScrollbar
+        then viewHorizontalScrollbar contentWidth shouldViewVerticalScrollbar model.viewport.top
+        else div [] []
     ]
 
 viewPositionedCaret : ModelInner -> Html Msg
@@ -700,7 +751,7 @@ viewPositionedCaret model =
       , css
           [ position absolute
           , top <| px (model.theme.lineHeight * toFloat model.caretPosition.line)
-          , left <| px (countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column))
+          , left <| px (model.charSize * toFloat model.caretPosition.column)
           , pointerEvents none
           , zIndex (int caretZIndex)
           ]
@@ -715,9 +766,8 @@ viewSelectionOverlay model =
     Just selection ->
       let
         normalizedSelection = Sel.normalizeSelection selection
-        lineNumWidth = countLineNumberFullWidth model.textValue
         viewSelectionOnLine i =
-          viewLineSelection i lineNumWidth model.charSize normalizedSelection model.theme.lineHeight model.theme.selection
+          viewLineSelection i 0 model.charSize normalizedSelection model.theme.lineHeight model.theme.selection
       in
       model.textValue
         |> String.lines
@@ -822,9 +872,7 @@ viewEditorLineWithCaret parser lineNumber lineContent lineHeightValue =
       , style "right" "0"
       , style "contain" "size layout"
       ]
-      (viewLineNumber lineNumber
-      :: viewLineContent 0 lineContent fragments
-      )
+      <| viewLineContent 0 lineContent fragments
 
 viewLineContent : Int -> String -> List StyledFragment -> List (Html Msg)
 viewLineContent index str normalizedFragments =
