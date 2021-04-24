@@ -412,13 +412,19 @@ shouldMove viewport caretPos caretWidth =
     shouldMoveDown viewport caretPos
 
 
-moveViewportIfNecessary : ViewportInfo -> CaretPixelPosition -> Float -> ViewportInfo
-moveViewportIfNecessary viewport caretPos caretWidth =
+moveViewportIfNecessary : ViewportInfo -> Float -> Float -> CaretPixelPosition -> Float -> ViewportInfo
+moveViewportIfNecessary viewport contentWidth contentHeight caretPos caretWidth =
     if shouldMove viewport caretPos caretWidth
       then
         let
-          newX = max 0 <| findNewX viewport caretPos caretWidth
-          newY = max 0 <| findNewY viewport caretPos
+          newX =
+            findNewX viewport caretPos caretWidth
+              |> min (contentWidth - viewport.width)
+              |> max 0
+          newY =
+            findNewY viewport caretPos
+            |> min (contentHeight - viewport.height)
+            |> max 0
         in
         { viewport | left = newX, top = newY }
       else
@@ -440,7 +446,10 @@ scrollToCaretIfNeeded model =
   let
     caretX = model.charSize * toFloat model.caretPosition.column
     caretY = model.theme.lineHeight * toFloat model.caretPosition.line
-    newViewport = moveViewportIfNecessary model.viewport (CaretPixelPosition caretX caretY) model.theme.caretWidth
+    lines = String.lines model.textValue
+    contentHeight = toFloat (List.length lines) * model.theme.lineHeight
+    contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines
+    newViewport = moveViewportIfNecessary model.viewport contentWidth contentHeight (CaretPixelPosition caretX caretY) model.theme.caretWidth
   in
   (Model { model | viewport = newViewport }, if newViewport /= model.viewport then syncScrollbar newViewport else Cmd.none)
 
@@ -704,7 +713,7 @@ viewContent leftOffset model =
   let
     lines = String.lines model.textValue
     contentHeight = toFloat (List.length lines) * model.theme.lineHeight
-    contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines -- TODO remove the constant once the gutters are out
+    contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines
     shouldViewVerticalScrollbar = contentHeight > model.viewport.height
     shouldViewHorizontalScrollbar = contentWidth > model.viewport.width
   in
