@@ -1,5 +1,5 @@
-module Main exposing (init, update, view, Msg, Model, StyledFragment)
-import Basics.Extra exposing (flip, maxSafeInteger)
+module Main exposing (init, update, view, Msg, Model, StyledFragment, Theme, Style(..), defaultTheme)
+import Basics.Extra exposing (flip, maxSafeInteger, uncurry)
 import Browser
 import Browser.Dom as Dom exposing (Element)
 import Change exposing (Change(..), applyChange)
@@ -8,9 +8,9 @@ import Css.Animations as Animation exposing (keyframes)
 import Css.Global as Global exposing (global)
 import Dict exposing (Dict)
 import Html.Styled.Events exposing (on, onInput, preventDefaultOn)
-import Html.Styled exposing (Html, br, div, span, text, textarea, toUnstyled)
+import Html.Styled exposing (Attribute, Html, br, div, span, text, textarea, toUnstyled)
 import Html.Styled.Attributes exposing (class, css, id, style, tabindex)
-import Html.Styled.Lazy exposing (lazy3)
+import Html.Styled.Lazy exposing (lazy3, lazy4)
 import Json.Decode as Json
 import KeyboardMsg exposing (KeyboardMsg(..), keyboardMsgDecoder)
 import List.Extra as EList exposing (dropWhile, last, takeWhile)
@@ -21,8 +21,8 @@ import CaretPosition as Pos exposing (CaretPosition)
 import Selection as Sel exposing (Selection)
 import Undo exposing (RedoStack, UndoStack, applyChangeToUndoStack, redoLastBatch, undoLastBatch)
 
-init : Parser (List StyledFragment) -> flags -> (Model, Cmd Msg)
-init highlighter =
+init : Parser (List StyledFragment) -> Theme -> flags -> (Model, Cmd Msg)
+init highlighter theme =
   always
     (
       Model
@@ -36,6 +36,7 @@ init highlighter =
        , redoStack = []
        , charSize = 0
        , viewport = { top = 0, left = 0, height = 100, width = 100 }
+       , theme = theme
        }
    , Cmd.batch [measureCharSize, measureViewport]
    )
@@ -65,12 +66,11 @@ measureViewport =
 -- CONSTANTS
 
 
-lineHeightConst = 17
-lineWidthConst = 200
+--lineHeightConst = 17
 fontSizeConst = 16
 viewportCaretPadding = 20
 viewportOverMoveToCaretMargin = 10
-caretWidth = 2
+--caretWidth = 2
 lineNumberMarginConst = 10
 lineNumberHorizontalPaddingConst = 5
 caretZIndex = 100
@@ -114,6 +114,7 @@ type alias ModelInner =
   , redoStack : RedoStack
   , charSize : Float
   , viewport : ViewportInfo
+  , theme : Theme
   }
 
 type alias ViewportInfo =
@@ -133,6 +134,30 @@ type alias StyledChar =
   { value : Char
   , isKeyword : Bool
   , isErrored : Bool
+  }
+
+type alias Theme =
+  { caret : Style
+  , caretWidth : Float
+  --, lineNumbers : Style
+  , lineHeight : Float
+  , root : Style
+  , selection : Style
+  }
+
+type Style
+  = Class String
+  | Styles (List (String, String))
+  | NoStyle
+
+defaultTheme : Theme
+defaultTheme =
+  { lineHeight = 17
+  , caretWidth = 2
+  , caret = NoStyle
+  , root = NoStyle
+  --, lineNumbers = NoStyle
+  , selection = NoStyle
   }
 
 
@@ -192,7 +217,7 @@ update msg (Model model) =
           let
             -- TODO: de-duplicate the content dimensions logic
             lines = String.lines model.textValue
-            contentHeight = List.length lines * lineHeightConst
+            contentHeight = toFloat (List.length lines) * model.theme.lineHeight
             contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines + countLineNumberFullWidth model.textValue + 20
             oldViewport = model.viewport
             newLeft =
@@ -201,7 +226,7 @@ update msg (Model model) =
                 |> max 0
             newTop =
               (oldViewport.top + top)
-                |> min (toFloat contentHeight - oldViewport.height)
+                |> min (contentHeight - oldViewport.height)
                 |> max 0
             newViewport = { oldViewport | left = newLeft, top = newTop }
           in
@@ -357,8 +382,8 @@ shouldMoveLeft : ViewportInfo -> CaretPixelPosition -> Bool
 shouldMoveLeft viewport caretPos =
     caretPos.x - viewport.left < viewportCaretPadding
 
-shouldMoveRight : ViewportInfo -> CaretPixelPosition -> Bool
-shouldMoveRight viewport caretPos =
+shouldMoveRight : ViewportInfo -> CaretPixelPosition -> Float -> Bool
+shouldMoveRight viewport caretPos caretWidth =
     caretPos.x - viewport.left > viewport.width - viewportCaretPadding - caretWidth
 
 shouldMoveUp : ViewportInfo -> CaretPixelPosition -> Bool
@@ -369,9 +394,9 @@ shouldMoveDown : ViewportInfo -> CaretPixelPosition -> Bool
 shouldMoveDown viewport caretPos =
     caretPos.y - viewport.top > viewport.height - viewportCaretPadding
 
-findNewX : ViewportInfo -> CaretPixelPosition -> Float
-findNewX viewport caretPos =
-  if not (shouldMoveLeft viewport caretPos || shouldMoveRight viewport caretPos)
+findNewX : ViewportInfo -> CaretPixelPosition -> Float -> Float
+findNewX viewport caretPos caretWidth =
+  if not (shouldMoveLeft viewport caretPos || shouldMoveRight viewport caretPos caretWidth)
     then
       viewport.left
     else
@@ -389,20 +414,20 @@ findNewY viewport caretPos =
         then caretPos.y - viewportCaretPadding - viewportOverMoveToCaretMargin
         else caretPos.y - viewport.height + viewportCaretPadding + viewportOverMoveToCaretMargin
 
-shouldMove : ViewportInfo -> CaretPixelPosition -> Bool
-shouldMove viewport caretPos =
+shouldMove : ViewportInfo -> CaretPixelPosition -> Float -> Bool
+shouldMove viewport caretPos caretWidth =
     shouldMoveLeft viewport caretPos ||
-    shouldMoveRight viewport caretPos ||
+    shouldMoveRight viewport caretPos caretWidth ||
     shouldMoveUp viewport caretPos ||
     shouldMoveDown viewport caretPos
 
 
-moveViewportIfNecessary : ViewportInfo -> CaretPixelPosition -> ViewportInfo
-moveViewportIfNecessary viewport caretPos =
-    if shouldMove viewport caretPos
+moveViewportIfNecessary : ViewportInfo -> CaretPixelPosition -> Float -> ViewportInfo
+moveViewportIfNecessary viewport caretPos caretWidth =
+    if shouldMove viewport caretPos caretWidth
       then
         let
-          newX = max 0 <| findNewX viewport caretPos
+          newX = max 0 <| findNewX viewport caretPos caretWidth
           newY = max 0 <| findNewY viewport caretPos
         in
         { viewport | left = newX, top = newY }
@@ -424,8 +449,8 @@ scrollToCaretIfNeeded : ModelInner -> (Model, Cmd Msg)
 scrollToCaretIfNeeded model =
   let
     caretX = countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column)
-    caretY = toFloat <| lineHeightConst * model.caretPosition.line
-    newViewport = moveViewportIfNecessary model.viewport (CaretPixelPosition caretX caretY)
+    caretY = model.theme.lineHeight * toFloat model.caretPosition.line
+    newViewport = moveViewportIfNecessary model.viewport (CaretPixelPosition caretX caretY) model.theme.caretWidth
   in
   (Model { model | viewport = newViewport }, if newViewport /= model.viewport then syncScrollbar newViewport else Cmd.none)
 
@@ -452,15 +477,15 @@ countLineNumberWidth : Int -> Float
 countLineNumberWidth linesNumber =
     toFloat (10 + countDigits (max 1 linesNumber) * 10)
 
-viewPredefinedStyles : Int -> Html Msg
-viewPredefinedStyles linesNumber =
+viewPredefinedStyles : Int -> Float -> Html Msg
+viewPredefinedStyles linesNumber lineHeightValue =
     let
       lineNumberWidth = countLineNumberWidth linesNumber
     in
     global
       [ Global.class "line"
-        [ minHeight (px lineHeightConst)
-        , lineHeight (px lineHeightConst)
+        [ minHeight (px lineHeightValue)
+        , lineHeight (px lineHeightValue)
         , displayFlex
         , whiteSpace pre
         ]
@@ -537,13 +562,13 @@ view : Model -> Html Msg
 view (Model model) =
     let
       lines = String.lines model.textValue
-      contentHeight = List.length lines * lineHeightConst
+      contentHeight = toFloat (List.length lines) * model.theme.lineHeight
       contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines + countLineNumberFullWidth model.textValue + 20 -- TODO remove the constant once the gutters are out
-      shouldViewVerticalScrollbar = toFloat contentHeight > model.viewport.height
+      shouldViewVerticalScrollbar = contentHeight > model.viewport.height
       shouldViewHorizontalScrollbar = contentWidth > model.viewport.width
     in
     div
-      [ css
+      ([ css
           [ whiteSpace noWrap
           , fontSize (px fontSizeConst)
           , position relative
@@ -562,9 +587,9 @@ view (Model model) =
       , preventDefaultOn "keydown" <| wrapKeyboardDecoder keyboardMsgDecoder
       , tabindex 0
       , id editorId
-      ]
+      ] ++ applyStyle "" model.theme.root)
       [ viewCharSizeTest
-      , viewPredefinedStyles (List.length <| String.lines model.textValue)
+      , viewPredefinedStyles (List.length <| String.lines model.textValue) model.theme.lineHeight
       , viewContent model
       , if shouldViewVerticalScrollbar
           then viewVerticalScrollbar contentHeight shouldViewHorizontalScrollbar model.viewport.left
@@ -584,7 +609,7 @@ scrollLeftDecoder msgCreator =
   Json.map msgCreator
     (Json.at ["target", "scrollLeft"] Json.float)
 
-viewVerticalScrollbar : Int -> Bool -> Float -> Html Msg
+viewVerticalScrollbar : Float -> Bool -> Float -> Html Msg
 viewVerticalScrollbar contentHeight areBothScrollbarsPresent scrollLeft =
   div
     [ id verticalScrollbarId
@@ -600,7 +625,7 @@ viewVerticalScrollbar contentHeight areBothScrollbarsPresent scrollLeft =
     [ div
         [ id "vertical-scrollbar-inner"
         , style "min-width" "1px"
-        , style "height" (String.fromInt contentHeight ++ "px")
+        , style "height" (String.fromFloat contentHeight ++ "px")
         , on "scroll" (scrollTopDecoder <| ViewportMovedTo scrollLeft)
         ]
         [
@@ -674,13 +699,13 @@ viewPositionedCaret model =
       [ id "caretPositioned"
       , css
           [ position absolute
-          , top <| px (toFloat <| lineHeightConst * model.caretPosition.line)
+          , top <| px (model.theme.lineHeight * toFloat model.caretPosition.line)
           , left <| px (countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column))
           , pointerEvents none
           , zIndex (int caretZIndex)
           ]
       ]
-      [ caret
+      [ caret model.theme.caret model.theme.caretWidth model.theme.lineHeight
       ]
 
 viewSelectionOverlay : ModelInner -> Html msg
@@ -691,18 +716,20 @@ viewSelectionOverlay model =
       let
         normalizedSelection = Sel.normalizeSelection selection
         lineNumWidth = countLineNumberFullWidth model.textValue
+        viewSelectionOnLine i =
+          viewLineSelection i lineNumWidth model.charSize normalizedSelection model.theme.lineHeight model.theme.selection
       in
       model.textValue
         |> String.lines
         |> List.indexedMap (\i line -> if i >= normalizedSelection.start.line && i <= normalizedSelection.end.line then Just line else Nothing)
-        |> List.indexedMap (\i mLine -> Maybe.map (always <| viewLineSelection i lineNumWidth model.charSize normalizedSelection) mLine)
+        |> List.indexedMap (\i mLine -> Maybe.map (always <| viewSelectionOnLine i) mLine)
         |> List.concatMap (Maybe.withDefault [] << Maybe.map (\e -> [e]))
         |> div []
 
-viewLineSelection : Int -> Float -> Float -> Selection -> Html msg
-viewLineSelection lineNumber lineLeftOffset charWidth selection =
+viewLineSelection : Int -> Float -> Float -> Selection -> Float -> Style -> Html msg
+viewLineSelection lineNumber lineLeftOffset charWidth selection lineHeightValue selectionStyle =
     let
-      topPx = lineNumber * lineHeightConst
+      topPx = toFloat lineNumber * lineHeightValue
       selectionStart =
         if selection.start.line == lineNumber
           then selection.start.column
@@ -713,14 +740,14 @@ viewLineSelection lineNumber lineLeftOffset charWidth selection =
           then Px ((toFloat selection.end.column * charWidth) - leftPx + lineLeftOffset)
           else UntilLineEnd
     in
-    viewSelection (toFloat topPx) leftPx lineSelectionWidth
+    viewSelection topPx leftPx lineSelectionWidth lineHeightValue selectionStyle
 
 type LineSelectionWidth
   = Px Float
   | UntilLineEnd
 
-viewSelection : Float -> Float -> LineSelectionWidth -> Html msg
-viewSelection topPx leftPx lineSelectionWidth =
+viewSelection : Float -> Float -> LineSelectionWidth -> Float -> Style -> Html msg
+viewSelection topPx leftPx lineSelectionWidth lineHeightValue selectionStyle =
     let
       widthProperty =
         case lineSelectionWidth of
@@ -728,12 +755,11 @@ viewSelection topPx leftPx lineSelectionWidth =
           UntilLineEnd -> "100%"
     in
     div
-      [ class "line-selection"
-      , style "height" (String.fromInt lineHeightConst ++ "px")
+      ([ style "height" (String.fromFloat lineHeightValue ++ "px")
       , style "top" (String.fromFloat topPx ++ "px")
       , style "left" (String.fromFloat leftPx ++ "px")
       , style "width" widthProperty
-      ]
+      ] ++ applyStyle "line-selection" selectionStyle)
       []
 
 viewCharSizeTest : Html msg
@@ -753,8 +779,8 @@ viewCharSizeTest =
 viewTextLayer : ModelInner -> Html Msg
 viewTextLayer model =
   let
-    viewportStartLine = floor model.viewport.top // lineHeightConst
-    viewportLineCount = ceiling model.viewport.height // lineHeightConst + 5
+    viewportStartLine = floor <| model.viewport.top / model.theme.lineHeight
+    viewportLineCount = ceiling <| model.viewport.height / model.theme.lineHeight + 5
   in
   div
     [ css
@@ -770,14 +796,14 @@ viewTextLayer model =
     <| ( model.textValue
           |> String.lines
           |> (List.take viewportLineCount << List.drop viewportStartLine)
-          |> List.indexedMap (\i l -> lazy3 viewEditorLineWithCaret model.highlighter (i + viewportStartLine) l)
+          |> List.indexedMap (\i l -> lazy4 viewEditorLineWithCaret model.highlighter (i + viewportStartLine) l model.theme.lineHeight)
           |> (\lst ->
               if List.isEmpty lst
-                then [viewEditorLineWithCaret model.highlighter 0 ""]
+                then [viewEditorLineWithCaret model.highlighter 0 "" model.theme.lineHeight]
                 else lst))
 
-viewEditorLineWithCaret : Parser (List StyledFragment) -> Int -> String -> Html Msg
-viewEditorLineWithCaret parser lineNumber lineContent =
+viewEditorLineWithCaret : Parser (List StyledFragment) -> Int -> String -> Float -> Html Msg
+viewEditorLineWithCaret parser lineNumber lineContent lineHeightValue =
     let
       fragments =
         Parser.run parser lineContent
@@ -791,7 +817,7 @@ viewEditorLineWithCaret parser lineNumber lineContent =
       , on "mousemove" <| clickDecoder <| SelectionProgressed lineNumber
       , on "mouseup" <| clickDecoder <| SelectionFinished lineNumber
       , style "position" "absolute"
-      , style "top" (String.fromInt (lineNumber * lineHeightConst) ++ "px")
+      , style "top" (String.fromFloat (toFloat lineNumber * lineHeightValue) ++ "px")
       , style "left" "0"
       , style "right" "0"
       , style "contain" "size layout"
@@ -843,6 +869,18 @@ splitBy isDivider list =
       Just (first, []) -> if isDivider first then [[]] else [[first]]
       Just (first, rest) -> if isDivider first then continue rest else continue list
 
+applyStyle : String -> Style -> List (Attribute msg)
+applyStyle baseClass styleToApply =
+  case styleToApply of
+    Class c ->
+      [class (baseClass ++ c)]
+    Styles st ->
+      st
+       |> List.map (uncurry style)
+       |> List.append (if String.length baseClass > 0 then [class baseClass] else [])
+    NoStyle ->
+      []
+
 --insertOnIndex : Int -> a -> List a -> List a
 --insertOnIndex index element lst =
 --  List.take index lst ++ element :: List.drop index lst
@@ -853,11 +891,12 @@ splitBy isDivider list =
 --      Nothing -> list
 --      Just index -> insertOnIndex index elem list
 
-caret =
+caret : Style -> Float -> Float -> Html msg
+caret caretStyle caretWidth lineHeightValue =
   span
-    [ css
+    ([ css
         [ display block
-        , height (px 15)
+        , height (px lineHeightValue)
         , width (px caretWidth)
         , backgroundColor (rgb 200 20 0)
         , animationName <| keyframes [ (0, [ Animation.opacity (int 100) ]), (100, [ Animation.opacity (int 0) ]) ]
@@ -867,4 +906,6 @@ caret =
         ]
     , id "caret-inner"
     , tabindex 0
-    ] []
+    ] ++ applyStyle "" caretStyle ++ [ style "width" (String.fromFloat caretWidth ++ "px") ])
+    [
+    ]
