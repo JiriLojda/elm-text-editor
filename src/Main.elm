@@ -23,18 +23,22 @@ import Undo exposing (RedoStack, UndoStack, applyChangeToUndoStack, redoLastBatc
 
 init : Parser (List StyledFragment) -> flags -> (Model, Cmd Msg)
 init highlighter =
-  always (
-   { textValue = "empty"
-   , isSelectionInProgress = False
-   , caretPosition = CaretPosition 0 0
-   , selection = Nothing
-   , highlighter = highlighter
-   , clipboard = ""
-   , undoStack = []
-   , redoStack = []
-   , charSize = 0
-   , viewport = { top = 0, left = 0, height = 100, width = 100 }
-   }, Cmd.batch [measureCharSize, measureViewport])
+  always
+    (
+      Model
+       { textValue = "empty"
+       , isSelectionInProgress = False
+       , caretPosition = CaretPosition 0 0
+       , selection = Nothing
+       , highlighter = highlighter
+       , clipboard = ""
+       , undoStack = []
+       , redoStack = []
+       , charSize = 0
+       , viewport = { top = 0, left = 0, height = 100, width = 100 }
+       }
+   , Cmd.batch [measureCharSize, measureViewport]
+   )
 
 measureCharSize : Cmd Msg
 measureCharSize =
@@ -97,7 +101,9 @@ type Msg
       | ViewportMovedTo Float Float
       | ViewportMovedBy Float Float
 
-type alias Model =
+type Model = Model ModelInner
+
+type alias ModelInner =
   { textValue : String
   , caretPosition : CaretPosition
   , highlighter : Parser (List StyledFragment)
@@ -134,22 +140,22 @@ type alias StyledChar =
 
 
 update : Msg -> Model -> (Model, Cmd Msg)
-update msg model =
+update msg (Model model) =
     case msg of
-        TextChangedTestArea text -> ({ model | textValue = text }, Cmd.none)
+        TextChangedTestArea text -> (Model { model | textValue = text }, Cmd.none)
         KeyboardMsgWrapper keyMsg ->
           let
             newModel = updateAfterKeyboardMsg keyMsg model
           in
           scrollToCaretIfNeeded newModel
-        None -> (model, Cmd.none)
-        DebugFail error -> ({ model | textValue = error }, Cmd.none)
+        None -> (Model model, Cmd.none)
+        DebugFail error -> (Model { model | textValue = error }, Cmd.none)
         SelectionStarted line x ->
           let
             position = convertClickedPosToCaretPos model { x = x, y = line}
             updatedModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = False }) model
           in
-          ({ updatedModel | isSelectionInProgress = True }, Cmd.none)
+          (Model { updatedModel | isSelectionInProgress = True }, Cmd.none)
         SelectionProgressed line x ->
           if model.isSelectionInProgress
             then
@@ -159,7 +165,7 @@ update msg model =
               in
               scrollToCaretIfNeeded newModel
             else
-              (model, Cmd.none)
+              (Model model, Cmd.none)
         SelectionFinished line x ->
           if model.isSelectionInProgress
             then
@@ -167,21 +173,21 @@ update msg model =
                 position = convertClickedPosToCaretPos model { x = x, y = line}
                 updatedModel = applyChangeWithUndo (CaretMoved { toPosition = position, withSelection = True }) model
               in
-              ({ updatedModel
+              (Model { updatedModel
               | isSelectionInProgress = False
               , selection = if Sel.isEmptySelection updatedModel.selection then Nothing else updatedModel.selection
               }, Task.attempt (always None) <| Dom.focus "editor")
             else
-              (model, Cmd.none)
+              (Model model, Cmd.none)
         CharMeasured size ->
-          ({ model | charSize = size }, Cmd.none)
+          (Model { model | charSize = size }, Cmd.none)
         ViewportUpdated viewport ->
-          ({ model | viewport = viewport }, Cmd.none)
+          (Model { model | viewport = viewport }, Cmd.none)
         ViewportMovedTo left top ->
           let
             viewport = model.viewport
           in
-          ({ model | viewport = { viewport | left = left, top = top } }, Cmd.none)
+          (Model { model | viewport = { viewport | left = left, top = top } }, Cmd.none)
         ViewportMovedBy left top ->
           let
             -- TODO: de-duplicate the content dimensions logic
@@ -199,9 +205,9 @@ update msg model =
                 |> max 0
             newViewport = { oldViewport | left = newLeft, top = newTop }
           in
-          ({ model | viewport = newViewport }, syncScrollbar newViewport)
+          (Model { model | viewport = newViewport }, syncScrollbar newViewport)
 
-updateAfterKeyboardMsg : KeyboardMsg -> Model -> Model
+updateAfterKeyboardMsg : KeyboardMsg -> ModelInner -> ModelInner
 updateAfterKeyboardMsg msg model =
   case msg of
     InsertChar c ->
@@ -312,7 +318,7 @@ updateAfterKeyboardMsg msg model =
     Redo ->
       redoLastBatch model
 
-convertClickedPosToCaretPos : Model -> { x : Int, y: Int } -> CaretPosition
+convertClickedPosToCaretPos : ModelInner -> { x : Int, y: Int } -> CaretPosition
 convertClickedPosToCaretPos model { x, y } =
   let
     lineNumberFullWidth = countLineNumberFullWidth model.textValue
@@ -336,7 +342,7 @@ countLineNumberFullWidth textValue =
       |> countLineNumberWidth
       |> (+) lineNumberMarginConst
 
-applyChangeWithUndo : Change -> Model -> Model
+applyChangeWithUndo : Change -> ModelInner -> ModelInner
 applyChangeWithUndo change model =
     model
       |> applyChangeToUndoStack change
@@ -414,14 +420,14 @@ syncScrollbar viewport =
     |> Task.attempt (always None)
 
 
-scrollToCaretIfNeeded : Model -> (Model, Cmd Msg)
+scrollToCaretIfNeeded : ModelInner -> (Model, Cmd Msg)
 scrollToCaretIfNeeded model =
   let
     caretX = countLineNumberFullWidth model.textValue + (model.charSize * toFloat model.caretPosition.column)
     caretY = toFloat <| lineHeightConst * model.caretPosition.line
     newViewport = moveViewportIfNecessary model.viewport (CaretPixelPosition caretX caretY)
   in
-  ({ model | viewport = newViewport }, if newViewport /= model.viewport then syncScrollbar newViewport else Cmd.none)
+  (Model { model | viewport = newViewport }, if newViewport /= model.viewport then syncScrollbar newViewport else Cmd.none)
 
 -- SUBSCRIPTIONS
 
@@ -528,7 +534,7 @@ endLine =
   Tuple.first << .to
 
 view : Model -> Html Msg
-view model =
+view (Model model) =
     let
       lines = String.lines model.textValue
       contentHeight = List.length lines * lineHeightConst
@@ -630,7 +636,7 @@ wheelDecoder msgCreator =
     (Json.field "deltaX" Json.float)
     (Json.field "deltaY" Json.float)
 
-viewContent : Model -> Html Msg
+viewContent : ModelInner -> Html Msg
 viewContent model =
   div
     [ css
@@ -662,7 +668,7 @@ viewContent model =
         ]
     ]
 
-viewPositionedCaret : Model -> Html Msg
+viewPositionedCaret : ModelInner -> Html Msg
 viewPositionedCaret model =
     div
       [ id "caretPositioned"
@@ -677,7 +683,7 @@ viewPositionedCaret model =
       [ caret
       ]
 
-viewSelectionOverlay : Model -> Html msg
+viewSelectionOverlay : ModelInner -> Html msg
 viewSelectionOverlay model =
   case model.selection of
     Nothing -> div [] []
@@ -744,7 +750,7 @@ viewCharSizeTest =
     [ text "mmmmmmmmmmiiiiiiiiiioooooooooowwwwwwwwwwlllllllllljjjjjjjjjj"
     ]
 
-viewTextLayer : Model -> Html Msg
+viewTextLayer : ModelInner -> Html Msg
 viewTextLayer model =
   let
     viewportStartLine = floor model.viewport.top // lineHeightConst
@@ -769,15 +775,6 @@ viewTextLayer model =
               if List.isEmpty lst
                 then [viewEditorLineWithCaret model.highlighter 0 ""]
                 else lst))
-
-type alias ViewLineParams =
-  { isSelectionInProgress : Bool
-  , selection : Maybe Selection
-  , caretPositionOnLine : Maybe Int
-  , lineNumber : Int
-  , chars : List StyledChar
-  , isLastLine : Bool
-  }
 
 viewEditorLineWithCaret : Parser (List StyledFragment) -> Int -> String -> Html Msg
 viewEditorLineWithCaret parser lineNumber lineContent =
