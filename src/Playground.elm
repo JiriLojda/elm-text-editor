@@ -26,6 +26,7 @@ theme =
   , root = Editor.Styles [("background-color", "#f2f2f2"), ("font-size", String.fromFloat textSize ++ "px")]
   , selection = Editor.Styles [("background-color", "rgb(224, 2, 179)")]
   , lineHeight = textSize
+  , gutters = Editor.Styles [("font-size", "10px")]
   }
 
 

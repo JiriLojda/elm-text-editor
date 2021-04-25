@@ -140,7 +140,7 @@ type alias StyledChar =
 type alias Theme =
   { caret : Style
   , caretWidth : Float
-  --, lineNumbers : Style
+  , gutters : Style
   , lineHeight : Float
   , root : Style
   , selection : Style
@@ -157,7 +157,7 @@ defaultTheme =
   , caretWidth = 2
   , caret = NoStyle
   , root = NoStyle
-  --, lineNumbers = NoStyle
+  , gutters = NoStyle
   , selection = NoStyle
   }
 
@@ -675,13 +675,13 @@ viewGutters guttersWidth model =
     viewportLineCount = ceiling <| model.viewport.height / model.theme.lineHeight + 5
   in
   div
-    [ style "top" "0px"
+    ([ style "top" "0px"
     , style "left" "0px"
     , style "width" (String.fromFloat guttersWidth ++ "px")
     , style "background-color" "#99d01f"
     , style "position" "absolute"
     , style "bottom" "0px"
-    ]
+    ] ++ applyStyle "" model.theme.gutters)
     <| (
       lines
         |> (List.take viewportLineCount << List.drop viewportStartLine)
@@ -694,6 +694,7 @@ viewLineNumberNew lineHeight topOffset num =
     [ style "display" "flex"
     , style "width" "100%"
     , style "justify-content" "center"
+    , style "align-items" "center"
     , style "height" (String.fromFloat lineHeight ++ "px")
     , style "position" "absolute"
     , style "top" (String.fromFloat topOffset ++ "px")
