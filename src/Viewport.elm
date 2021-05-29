@@ -66,7 +66,15 @@ shouldViewVerticalScrollbar (Viewport viewport) =
 
 shouldViewVerticalScrollbarInner : ViewportInfo -> Bool
 shouldViewVerticalScrollbarInner viewport =
-    viewport.contentDimensions.height > viewport.height
+    let
+        horizontalScrollbarSize =
+            if contentWidthInner viewport > viewport.width then
+                viewport.scrollbarSize
+
+            else
+                0
+    in
+    contentHeightInner viewport > viewport.height - horizontalScrollbarSize
 
 
 shouldViewHorizontalScrollbar : Viewport -> Bool
@@ -76,7 +84,15 @@ shouldViewHorizontalScrollbar (Viewport viewport) =
 
 shouldViewHorizontalScrollbarInner : ViewportInfo -> Bool
 shouldViewHorizontalScrollbarInner viewport =
-    viewport.contentDimensions.width + viewportAllowedOverscroll > viewport.width
+    let
+        verticalScrollbarSize =
+            if contentHeightInner viewport > viewport.height then
+                viewport.scrollbarSize
+
+            else
+                0
+    in
+    contentWidthInner viewport > viewport.width - verticalScrollbarSize
 
 
 top : Viewport -> Float
@@ -119,11 +135,21 @@ widthInner viewport =
 
 contentHeight : Viewport -> Float
 contentHeight (Viewport viewport) =
+    contentHeightInner viewport
+
+
+contentHeightInner : ViewportInfo -> Float
+contentHeightInner viewport =
     viewport.contentDimensions.height
 
 
 contentWidth : Viewport -> Float
 contentWidth (Viewport viewport) =
+    contentWidthInner viewport
+
+
+contentWidthInner : ViewportInfo -> Float
+contentWidthInner viewport =
     viewport.contentDimensions.width + viewportAllowedOverscroll
 
 
@@ -180,11 +206,11 @@ round viewport =
         { viewport
             | left =
                 viewport.left
-                    |> min (viewport.contentDimensions.width + viewportAllowedOverscroll - widthInner viewport)
+                    |> min (contentWidthInner viewport - widthInner viewport)
                     |> max 0
             , top =
                 viewport.top
-                    |> min (viewport.contentDimensions.height - heightInner viewport)
+                    |> min (contentHeightInner viewport - heightInner viewport)
                     |> max 0
         }
 
