@@ -2,52 +2,70 @@ module CaretPosition exposing (..)
 
 import List.Extra as EList
 
+
 type alias CaretPosition =
-  { column : Int
-  , line : Int
-  }
+    { column : Int
+    , line : Int
+    }
 
 
 caretPosToIndex : String -> CaretPosition -> Int
 caretPosToIndex textValue caretPos =
     let
-      lines = String.lines textValue
-      result =
-        lines
-          |> List.take caretPos.line
-          |> List.map String.length
-          |> List.map ((+) 1)
-          |> List.sum
-          |> ((+) caretPos.column)
+        lines =
+            String.lines textValue
+
+        result =
+            lines
+                |> List.take caretPos.line
+                |> List.map String.length
+                |> List.map ((+) 1)
+                |> List.sum
+                |> (+) caretPos.column
     in
     max 0 <| min (String.length textValue) result
+
 
 indexToCaretPos : String -> Int -> CaretPosition
 indexToCaretPos textValue index =
     let
-      relevantChars = String.slice 0 index textValue
-      lines = String.lines relevantChars
-      newLinesCount = List.length lines - 1
-      lastLine = Maybe.withDefault "" <| EList.last lines
+        relevantChars =
+            String.slice 0 index textValue
+
+        lines =
+            String.lines relevantChars
+
+        newLinesCount =
+            List.length lines - 1
+
+        lastLine =
+            Maybe.withDefault "" <| EList.last lines
     in
     CaretPosition (String.length lastLine) newLinesCount
 
+
 updateCaretPosByIndexUpdate : (Int -> Int) -> String -> CaretPosition -> CaretPosition
 updateCaretPosByIndexUpdate updater str oldPos =
-  caretPosToIndex str oldPos
-    |> updater
-    |> min (String.length str)
-    |> max 0
-    |> indexToCaretPos str
+    caretPosToIndex str oldPos
+        |> updater
+        |> min (String.length str)
+        |> max 0
+        |> indexToCaretPos str
+
 
 roundCaretPos : String -> CaretPosition -> CaretPosition
 roundCaretPos textValue caretPos =
-  let
-    lines = String.lines textValue
-    lineNum = max 0 <| min (List.length lines - 1) caretPos.line
-  in
-  case EList.getAt lineNum lines of
-    --Nothing -> Debug.log "Failed to find selected line. :O " <| CaretPosition 0 0
-    Nothing -> CaretPosition 0 0
-    Just line -> CaretPosition (max 0 <| min (String.length line) caretPos.column) lineNum
+    let
+        lines =
+            String.lines textValue
 
+        lineNum =
+            max 0 <| min (List.length lines - 1) caretPos.line
+    in
+    case EList.getAt lineNum lines of
+        --Nothing -> Debug.log "Failed to find selected line. :O " <| CaretPosition 0 0
+        Nothing ->
+            CaretPosition 0 0
+
+        Just line ->
+            CaretPosition (max 0 <| min (String.length line) caretPos.column) lineNum
