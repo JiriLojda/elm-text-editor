@@ -20,13 +20,18 @@ import Task as Task
 import CaretPosition as Pos exposing (CaretPosition)
 import Selection as Sel exposing (Selection)
 import Undo exposing (RedoStack, UndoStack, applyChangeToUndoStack, redoLastBatch, undoLastBatch)
+import Viewport as VPort exposing (Viewport)
 
 init : Parser (List StyledFragment) -> Theme -> flags -> (Model, Cmd Msg)
 init highlighter theme =
+  let
+    initialText = "empty"
+    lines = String.lines initialText
+  in
   always
     (
       Model
-       { textValue = "empty"
+       { textValue = initialText
        , isSelectionInProgress = False
        , caretPosition = CaretPosition 0 0
        , selection = Nothing
@@ -35,7 +40,10 @@ init highlighter theme =
        , undoStack = []
        , redoStack = []
        , charSize = 0
-       , viewport = { top = 0, left = 0, height = 100, width = 100 }
+       , viewport = VPort.init
+          { width = calculateContentWidth lines 10 -- char size approximation before we measure it
+          , height = calculateContentHeight lines theme.lineHeight
+          }
        , theme = theme
        }
    , Cmd.batch [measureCharSize, measureViewport]
@@ -55,11 +63,11 @@ measureCharSize =
 measureViewport : Cmd Msg
 measureViewport =
   Dom.getElement viewportId
-    |> Task.map (\v -> { top = 0, left = 0, height = v.element.height, width = v.element.width })
+    |> Task.map (\v -> { height = v.element.height, width = v.element.width })
     |> Task.attempt
       (\result ->
         case result of
-          Ok v -> ViewportUpdated v
+          Ok v -> ViewportSizeUpdated v.width v.height
           Err err -> DebugFail <| Debug.toString err
       )
 
@@ -68,8 +76,6 @@ measureViewport =
 
 --lineHeightConst = 17
 fontSizeConst = 16
-viewportCaretPadding = 20
-viewportOverMoveToCaretMargin = 10
 --caretWidth = 2
 lineNumberMarginConst = 10
 lineNumberHorizontalPaddingConst = 5
@@ -98,7 +104,7 @@ type Msg
       | None
       | DebugFail String
       | CharMeasured Float
-      | ViewportUpdated ViewportInfo
+      | ViewportSizeUpdated Float Float
       | ViewportMovedTo Float Float
       | ViewportMovedBy Float Float
 
@@ -114,15 +120,8 @@ type alias ModelInner =
   , undoStack : UndoStack
   , redoStack : RedoStack
   , charSize : Float
-  , viewport : ViewportInfo
+  , viewport : Viewport
   , theme : Theme
-  }
-
-type alias ViewportInfo =
-  { top : Float
-  , left : Float
-  , height : Float
-  , width : Float
   }
 
 type alias StyledFragment =
@@ -173,7 +172,10 @@ update msg (Model model) =
           let
             newModel = updateAfterKeyboardMsg keyMsg model
           in
-          scrollToCaretIfNeeded newModel
+          newModel
+            |> updateViewportSizeIfGuttersChange model
+            |> updateContentSize
+            |> scrollToCaretIfNeeded
         None -> (Model model, Cmd.none)
         DebugFail error -> (Model { model | textValue = error }, Cmd.none)
         SelectionStarted line x ->
@@ -206,30 +208,14 @@ update msg (Model model) =
             else
               (Model model, Cmd.none)
         CharMeasured size ->
-          (Model { model | charSize = size }, Cmd.none)
-        ViewportUpdated viewport ->
-          (Model { model | viewport = viewport }, Cmd.none)
+          (Model <| updateContentSize { model | charSize = size }, Cmd.none)
+        ViewportSizeUpdated newWidth newHeight ->
+          (Model { model | viewport = VPort.updateSize newWidth newHeight model.viewport }, Cmd.none)
         ViewportMovedTo left top ->
-          let
-            viewport = model.viewport
-          in
-          (Model { model | viewport = { viewport | left = left, top = top } }, Cmd.none)
+          (Model { model | viewport = VPort.moveTo left top model.viewport }, Cmd.none)
         ViewportMovedBy left top ->
           let
-            -- TODO: de-duplicate the content dimensions logic
-            lines = String.lines model.textValue
-            contentHeight = toFloat (List.length lines) * model.theme.lineHeight
-            contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines
-            oldViewport = model.viewport
-            newLeft =
-              (oldViewport.left + left)
-                |> min (contentWidth - oldViewport.width)
-                |> max 0
-            newTop =
-              (oldViewport.top + top)
-                |> min (contentHeight - oldViewport.height)
-                |> max 0
-            newViewport = { oldViewport | left = newLeft, top = newTop }
+            newViewport = VPort.moveBy left top model.viewport
           in
           (Model { model | viewport = newViewport }, syncScrollbar newViewport)
 
@@ -363,79 +349,23 @@ applyChangeWithUndo change model =
       |> applyChangeToUndoStack change
       |> applyChange change
 
-type alias CaretPixelPosition =
-  { x : Float
-  , y : Float
-  }
 
-shouldMoveLeft : ViewportInfo -> CaretPixelPosition -> Bool
-shouldMoveLeft viewport caretPos =
-    caretPos.x - viewport.left < viewportCaretPadding
-
-shouldMoveRight : ViewportInfo -> CaretPixelPosition -> Float -> Bool
-shouldMoveRight viewport caretPos caretWidth =
-    caretPos.x - viewport.left > viewport.width - viewportCaretPadding - caretWidth
-
-shouldMoveUp : ViewportInfo -> CaretPixelPosition -> Bool
-shouldMoveUp viewport caretPos =
-    caretPos.y - viewport.top < viewportCaretPadding && viewport.top > 0
-
-shouldMoveDown : ViewportInfo -> CaretPixelPosition -> Bool
-shouldMoveDown viewport caretPos =
-    caretPos.y - viewport.top > viewport.height - viewportCaretPadding
-
-findNewX : ViewportInfo -> CaretPixelPosition -> Float -> Float
-findNewX viewport caretPos caretWidth =
-  if not (shouldMoveLeft viewport caretPos || shouldMoveRight viewport caretPos caretWidth)
-    then
-      viewport.left
-    else
-      if shouldMoveLeft viewport caretPos
-        then caretPos.x - viewportCaretPadding - viewportOverMoveToCaretMargin + caretWidth
-        else caretPos.x - viewport.width + viewportCaretPadding + viewportOverMoveToCaretMargin
-
-findNewY : ViewportInfo -> CaretPixelPosition -> Float
-findNewY viewport caretPos =
-  if not (shouldMoveUp viewport caretPos || shouldMoveDown viewport caretPos)
-    then
-      viewport.top
-    else
-      if shouldMoveUp viewport caretPos
-        then caretPos.y - viewportCaretPadding - viewportOverMoveToCaretMargin
-        else caretPos.y - viewport.height + viewportCaretPadding + viewportOverMoveToCaretMargin
-
-shouldMove : ViewportInfo -> CaretPixelPosition -> Float -> Bool
-shouldMove viewport caretPos caretWidth =
-    shouldMoveLeft viewport caretPos ||
-    shouldMoveRight viewport caretPos caretWidth ||
-    shouldMoveUp viewport caretPos ||
-    shouldMoveDown viewport caretPos
+calculateContentHeight : List String -> Float -> Float
+calculateContentHeight lines lineHeight =
+  toFloat (List.length lines) * lineHeight
 
 
-moveViewportIfNecessary : ViewportInfo -> Float -> Float -> CaretPixelPosition -> Float -> ViewportInfo
-moveViewportIfNecessary viewport contentWidth contentHeight caretPos caretWidth =
-    if shouldMove viewport caretPos caretWidth
-      then
-        let
-          newX =
-            findNewX viewport caretPos caretWidth
-              |> min (contentWidth - viewport.width)
-              |> max 0
-          newY =
-            findNewY viewport caretPos
-            |> min (contentHeight - viewport.height)
-            |> max 0
-        in
-        { viewport | left = newX, top = newY }
-      else
-        viewport
+calculateContentWidth : List String -> Float -> Float
+calculateContentWidth lines charSize =
+  List.foldl (max << ((*) charSize) << toFloat << String.length) 0 lines
 
-syncScrollbar : ViewportInfo -> Cmd Msg
+
+syncScrollbar : Viewport -> Cmd Msg
 syncScrollbar viewport =
   let
-    syncHorizontalScrollbar = Dom.setViewportOf horizontalScrollbarId viewport.left 0
+    syncHorizontalScrollbar = Dom.setViewportOf horizontalScrollbarId (VPort.left viewport) 0
   in
-  Dom.setViewportOf verticalScrollbarId 0 viewport.top
+  Dom.setViewportOf verticalScrollbarId 0 (VPort.top viewport)
     |> Task.andThen (always syncHorizontalScrollbar)
     |> Task.onError (always syncHorizontalScrollbar)
     |> Task.attempt (always None)
@@ -446,12 +376,35 @@ scrollToCaretIfNeeded model =
   let
     caretX = model.charSize * toFloat model.caretPosition.column
     caretY = model.theme.lineHeight * toFloat model.caretPosition.line
-    lines = String.lines model.textValue
-    contentHeight = toFloat (List.length lines) * model.theme.lineHeight
-    contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines
-    newViewport = moveViewportIfNecessary model.viewport contentWidth contentHeight (CaretPixelPosition caretX caretY) model.theme.caretWidth
+    newViewport = VPort.moveViewportIfNecessary model.viewport { x = caretX, y = caretY } model.theme.caretWidth
   in
   (Model { model | viewport = newViewport }, if newViewport /= model.viewport then syncScrollbar newViewport else Cmd.none)
+
+
+updateContentSize : ModelInner -> ModelInner
+updateContentSize model =
+  let
+    lines = String.lines model.textValue
+  in
+  { model
+  | viewport = VPort.updateContentSize
+      { width = calculateContentWidth lines model.charSize
+      , height = calculateContentHeight lines model.theme.lineHeight
+      }
+      model.viewport
+  }
+
+
+updateViewportSizeIfGuttersChange : ModelInner -> ModelInner -> ModelInner
+updateViewportSizeIfGuttersChange oldModel newModel =
+  let
+    oldGuttersSize = countLineNumberFullWidth oldModel.textValue
+    newGuttersSize = countLineNumberFullWidth newModel.textValue
+    guttersSizeDiff = oldGuttersSize - newGuttersSize
+  in
+  { newModel
+  | viewport = VPort.changeWidthBy guttersSizeDiff newModel.viewport
+  }
 
 -- SUBSCRIPTIONS
 
@@ -466,11 +419,8 @@ subscriptions _ =
 wrapKeyboardDecoder : Json.Decoder KeyboardMsg -> Json.Decoder (Msg, Bool)
 wrapKeyboardDecoder = Json.map (\msg -> (KeyboardMsgWrapper msg, True))
 
-viewPredefinedStyles : Int -> Float -> Html Msg
-viewPredefinedStyles linesNumber lineHeightValue =
-    --let
-    --  lineNumberWidth = countLineNumberWidth linesNumber
-    --in
+viewPredefinedStyles : Float -> Html Msg
+viewPredefinedStyles lineHeightValue =
     global
       [ Global.class "line"
         [ minHeight (px lineHeightValue)
@@ -571,7 +521,7 @@ view (Model model) =
       , id editorId
       ] ++ applyStyle "" model.theme.root)
       [ viewCharSizeTest
-      , viewPredefinedStyles (List.length <| String.lines model.textValue) model.theme.lineHeight
+      , viewPredefinedStyles model.theme.lineHeight
       , viewContentWithGutters model
       ]
 
@@ -671,8 +621,8 @@ viewGutters : Float -> ModelInner -> Html Msg
 viewGutters guttersWidth model =
   let
     lines = String.lines model.textValue
-    viewportStartLine = floor <| model.viewport.top / model.theme.lineHeight
-    viewportLineCount = ceiling <| model.viewport.height / model.theme.lineHeight + 5
+    viewportStartLine = floor <| (VPort.top model.viewport) / model.theme.lineHeight
+    viewportLineCount = ceiling <| (VPort.height model.viewport) / model.theme.lineHeight + 5
   in
   div
     ([ style "top" "0px"
@@ -712,11 +662,8 @@ wheelDecoder msgCreator =
 viewContent : Float -> ModelInner -> Html Msg
 viewContent leftOffset model =
   let
-    lines = String.lines model.textValue
-    contentHeight = toFloat (List.length lines) * model.theme.lineHeight
-    contentWidth = List.foldl (max << ((*) model.charSize) << toFloat << String.length) 0 lines
-    shouldViewVerticalScrollbar = contentHeight > model.viewport.height
-    shouldViewHorizontalScrollbar = contentWidth > model.viewport.width
+    shouldViewVerticalScrollbar = VPort.shouldViewVerticalScrollbar model.viewport
+    shouldViewHorizontalScrollbar = VPort.shouldViewHorizontalScrollbar model.viewport
   in
   div
     [ css
@@ -734,8 +681,8 @@ viewContent leftOffset model =
     [ div
         [ css
           [ position absolute
-          , top (px (model.viewport.top * -1))
-          , left (px (model.viewport.left * -1))
+          , top (px (VPort.top model.viewport * -1))
+          , left (px (VPort.left model.viewport * -1))
           , height (px layerSize)
           , width (px layerSize)
           , property "contain" "size layout"
@@ -747,10 +694,10 @@ viewContent leftOffset model =
         , viewSelectionOverlay model
         ]
     , if shouldViewVerticalScrollbar
-        then viewVerticalScrollbar contentHeight shouldViewHorizontalScrollbar model.viewport.left
+        then viewVerticalScrollbar (VPort.contentHeight model.viewport) shouldViewHorizontalScrollbar <| VPort.left model.viewport
         else div [] []
     , if shouldViewHorizontalScrollbar
-        then viewHorizontalScrollbar contentWidth shouldViewVerticalScrollbar model.viewport.top
+        then viewHorizontalScrollbar (VPort.contentWidth model.viewport) shouldViewVerticalScrollbar <| VPort.top model.viewport
         else div [] []
     ]
 
@@ -839,8 +786,8 @@ viewCharSizeTest =
 viewTextLayer : ModelInner -> Html Msg
 viewTextLayer model =
   let
-    viewportStartLine = floor <| model.viewport.top / model.theme.lineHeight
-    viewportLineCount = ceiling <| model.viewport.height / model.theme.lineHeight + 5
+    viewportStartLine = floor <| VPort.top model.viewport / model.theme.lineHeight
+    viewportLineCount = ceiling <| VPort.height model.viewport / model.theme.lineHeight + 5
   in
   div
     [ css
