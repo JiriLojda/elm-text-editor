@@ -17,7 +17,7 @@ import List.Extra as EList exposing (dropWhile, last, takeWhile)
 import Parser exposing ((|.), (|=), Parser)
 import Selection as Sel exposing (Selection)
 import String
-import Task as Task
+import Task
 import Undo exposing (RedoStack, UndoStack, applyChangeToUndoStack, redoLastBatch, undoLastBatch)
 import Viewport as VPort exposing (Viewport)
 
@@ -598,7 +598,6 @@ viewPredefinedStyles lineHeightValue =
         [ Global.class "line"
             [ minHeight (px lineHeightValue)
             , lineHeight (px lineHeightValue)
-            , displayFlex
             , whiteSpace pre
             ]
         , Global.class "char-inner"
