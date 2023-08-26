@@ -1,6 +1,8 @@
 module KeyboardMsg exposing (KeyboardMsg(..), keyboardMsgDecoder)
 
+import Basics.Extra exposing (flip)
 import Json.Decode as Json
+import List.Extra as ListE
 import Tuple exposing (pair)
 
 
@@ -50,11 +52,14 @@ type Key
     | Enter
 
 
+type Modifier
+    = CtrlKey
+    | ShiftKey
+    | AltKey
+
+
 type alias Modifiers =
-    { ctrlPressed : Bool
-    , altPressed : Bool
-    , shiftPressed : Bool
-    }
+    List Modifier
 
 
 keyDecoder : Json.Decoder Key
@@ -109,86 +114,121 @@ keyDecoder =
 
 modifiersDecoder : Json.Decoder Modifiers
 modifiersDecoder =
-    Json.map3 Modifiers
-        (Json.field "ctrlKey" Json.bool)
-        (Json.field "altKey" Json.bool)
-        (Json.field "shiftKey" Json.bool)
+    let
+        parseModifier : Modifier -> String -> Json.Decoder (Maybe Modifier)
+        parseModifier modifier name =
+            Json.map
+                (\x ->
+                    if x then
+                        Just modifier
+
+                    else
+                        Nothing
+                )
+                (Json.field name Json.bool)
+
+        addJust : Maybe a -> List a -> List a
+        addJust m lst =
+            case m of
+                Just x ->
+                    x :: lst
+
+                Nothing ->
+                    lst
+
+        foldModifierDecoders : List (Json.Decoder (Maybe Modifier)) -> Json.Decoder (List Modifier)
+        foldModifierDecoders =
+            List.foldl (Json.map2 addJust) (Json.succeed [])
+    in
+    foldModifierDecoders
+        [ parseModifier CtrlKey "ctrlKey"
+        , parseModifier AltKey "altKey"
+        , parseModifier ShiftKey "shiftKey"
+        ]
+
+
+excludes : List a -> List a -> Bool
+excludes shouldBeExcluded set =
+    List.all (not << flip List.member set) shouldBeExcluded
+
+
+succeedIf : String -> Bool -> a -> Json.Decoder a
+succeedIf failMsg condition result =
+    if condition then
+        Json.succeed result
+
+    else
+        Json.fail failMsg
+
+
+succeedMsgIf : Bool -> a -> Json.Decoder a
+succeedMsgIf =
+    succeedIf "Unsupported keyboard shortcut"
 
 
 keyMsgDecoder : ( Key, Modifiers ) -> Json.Decoder KeyboardMsg
 keyMsgDecoder ( key, modifiers ) =
-    case ( key, ( modifiers.ctrlPressed, modifiers.shiftPressed, modifiers.altPressed ) ) of
-        ( CharKey c, ( False, _, False ) ) ->
-            Json.succeed (InsertChar c)
+    case key of
+        CharKey 'c' ->
+            succeedMsgIf (modifiers == [ CtrlKey ]) Copy
 
-        ( ArrowLeft, ( False, False, False ) ) ->
-            Json.succeed MoveCaretLeft
+        CharKey 'v' ->
+            succeedMsgIf (modifiers == [ CtrlKey ]) Paste
 
-        ( ArrowRight, ( False, False, False ) ) ->
-            Json.succeed MoveCaretRight
+        CharKey 'z' ->
+            succeedMsgIf (modifiers == [ CtrlKey ]) Undo
 
-        ( ArrowUp, ( False, False, False ) ) ->
-            Json.succeed MoveCaretUp
+        CharKey 'y' ->
+            succeedMsgIf (modifiers == [ CtrlKey ]) Redo
 
-        ( ArrowDown, ( False, False, False ) ) ->
-            Json.succeed MoveCaretDown
+        CharKey c ->
+            succeedMsgIf (excludes [ CtrlKey, AltKey ] modifiers) (InsertChar c)
 
-        ( ArrowLeft, ( False, True, False ) ) ->
-            Json.succeed MoveCaretLeftWithSelection
+        ArrowLeft ->
+            Json.oneOf
+                [ succeedMsgIf (modifiers == []) MoveCaretLeft
+                , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretLeftWithSelection
+                ]
 
-        ( ArrowRight, ( False, True, False ) ) ->
-            Json.succeed MoveCaretRightWithSelection
+        ArrowRight ->
+            Json.oneOf
+                [ succeedMsgIf (modifiers == []) MoveCaretRight
+                , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretRightWithSelection
+                ]
 
-        ( ArrowUp, ( False, True, False ) ) ->
-            Json.succeed MoveCaretUpWithSelection
+        ArrowUp ->
+            Json.oneOf
+                [ succeedMsgIf (modifiers == []) MoveCaretUp
+                , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretUpWithSelection
+                ]
 
-        ( ArrowDown, ( False, True, False ) ) ->
-            Json.succeed MoveCaretDownWithSelection
+        ArrowDown ->
+            Json.oneOf
+                [ succeedMsgIf (modifiers == []) MoveCaretDown
+                , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretDownWithSelection
+                ]
 
-        ( End, ( False, False, False ) ) ->
-            Json.succeed MoveCaretToLineEnd
+        End ->
+            Json.oneOf
+                [ succeedMsgIf (modifiers == []) MoveCaretToLineEnd
+                , succeedMsgIf (modifiers == [ CtrlKey ]) MoveCaretToTheEnd
+                , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretToLineEndWithSelection
+                , succeedMsgIf (ListE.isPermutationOf [ ShiftKey, CtrlKey ] modifiers) MoveCaretToTheEndWithSelection
+                ]
 
-        ( End, ( True, False, False ) ) ->
-            Json.succeed MoveCaretToTheEnd
+        Home ->
+            Json.oneOf
+                [ succeedMsgIf (modifiers == []) MoveCaretToLineStart
+                , succeedMsgIf (modifiers == [ CtrlKey ]) MoveCaretToTheStart
+                , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretToLineStartWithSelection
+                , succeedMsgIf (ListE.isPermutationOf [ ShiftKey, CtrlKey ] modifiers) MoveCaretToTheStartWithSelection
+                ]
 
-        ( Home, ( False, False, False ) ) ->
-            Json.succeed MoveCaretToLineStart
+        Delete ->
+            succeedMsgIf (modifiers == []) RemoveNextChar
 
-        ( Home, ( True, False, False ) ) ->
-            Json.succeed MoveCaretToTheStart
+        Backspace ->
+            succeedMsgIf (modifiers == []) RemovePrevChar
 
-        ( End, ( False, True, False ) ) ->
-            Json.succeed MoveCaretToLineEndWithSelection
-
-        ( End, ( True, True, False ) ) ->
-            Json.succeed MoveCaretToTheEndWithSelection
-
-        ( Home, ( False, True, False ) ) ->
-            Json.succeed MoveCaretToLineStartWithSelection
-
-        ( Home, ( True, True, False ) ) ->
-            Json.succeed MoveCaretToTheStartWithSelection
-
-        ( Delete, ( False, False, False ) ) ->
-            Json.succeed RemoveNextChar
-
-        ( Backspace, ( False, False, False ) ) ->
-            Json.succeed RemovePrevChar
-
-        ( Enter, ( False, _, False ) ) ->
-            Json.succeed AddNewLine
-
-        ( CharKey 'c', ( True, _, False ) ) ->
-            Json.succeed Copy
-
-        ( CharKey 'v', ( True, _, False ) ) ->
-            Json.succeed Paste
-
-        ( CharKey 'z', ( True, _, False ) ) ->
-            Json.succeed Undo
-
-        ( CharKey 'y', ( True, _, False ) ) ->
-            Json.succeed Redo
-
-        _ ->
-            Json.fail "Unsupported keyboard shortcut"
+        Enter ->
+            succeedMsgIf (excludes [ CtrlKey, AltKey ] modifiers) AddNewLine
