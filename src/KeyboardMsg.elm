@@ -56,6 +56,7 @@ type Modifier
     = CtrlKey
     | ShiftKey
     | AltKey
+    | ComandKey
 
 
 type alias Modifiers =
@@ -144,6 +145,7 @@ modifiersDecoder =
         [ parseModifier CtrlKey "ctrlKey"
         , parseModifier AltKey "altKey"
         , parseModifier ShiftKey "shiftKey"
+        , parseModifier ComandKey "metaKey"
         ]
 
 
@@ -169,43 +171,45 @@ succeedMsgIf =
 keyMsgDecoder : ( Key, Modifiers ) -> Json.Decoder KeyboardMsg
 keyMsgDecoder ( key, modifiers ) =
     case key of
-        CharKey 'c' ->
-            succeedMsgIf (modifiers == [ CtrlKey ]) Copy
-
-        CharKey 'v' ->
-            succeedMsgIf (modifiers == [ CtrlKey ]) Paste
-
-        CharKey 'z' ->
-            succeedMsgIf (modifiers == [ CtrlKey ]) Undo
-
-        CharKey 'y' ->
-            succeedMsgIf (modifiers == [ CtrlKey ]) Redo
-
         CharKey c ->
-            succeedMsgIf (excludes [ CtrlKey, AltKey ] modifiers) (InsertChar c)
+            Json.oneOf
+                [ succeedMsgIf (c == 'y' && modifiers == [ CtrlKey ] || modifiers == [ ComandKey ]) Redo
+                , succeedMsgIf (c == 'z' && modifiers == [ CtrlKey ] || modifiers == [ ComandKey ]) Undo
+                , succeedMsgIf (c == 'v' && modifiers == [ CtrlKey ] || modifiers == [ ComandKey ]) Paste
+                , succeedMsgIf (c == 'c' && modifiers == [ CtrlKey ] || modifiers == [ ComandKey ]) Copy
+                , succeedMsgIf (excludes [ CtrlKey, AltKey, ComandKey ] modifiers) (InsertChar c)
+                ]
 
         ArrowLeft ->
             Json.oneOf
                 [ succeedMsgIf (modifiers == []) MoveCaretLeft
                 , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretLeftWithSelection
+                , succeedMsgIf (modifiers == [ ComandKey ]) MoveCaretToLineStart
+                , succeedMsgIf (ListE.isPermutationOf [ ComandKey, ShiftKey ] modifiers) MoveCaretToLineStartWithSelection
                 ]
 
         ArrowRight ->
             Json.oneOf
                 [ succeedMsgIf (modifiers == []) MoveCaretRight
                 , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretRightWithSelection
+                , succeedMsgIf (modifiers == [ ComandKey ]) MoveCaretToLineEnd
+                , succeedMsgIf (ListE.isPermutationOf [ ComandKey, ShiftKey ] modifiers) MoveCaretToLineEndWithSelection
                 ]
 
         ArrowUp ->
             Json.oneOf
                 [ succeedMsgIf (modifiers == []) MoveCaretUp
                 , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretUpWithSelection
+                , succeedMsgIf (modifiers == [ ComandKey ]) MoveCaretToTheStart
+                , succeedMsgIf (ListE.isPermutationOf [ ComandKey, ShiftKey ] modifiers) MoveCaretToTheStartWithSelection
                 ]
 
         ArrowDown ->
             Json.oneOf
                 [ succeedMsgIf (modifiers == []) MoveCaretDown
                 , succeedMsgIf (modifiers == [ ShiftKey ]) MoveCaretDownWithSelection
+                , succeedMsgIf (modifiers == [ ComandKey ]) MoveCaretToTheEnd
+                , succeedMsgIf (ListE.isPermutationOf [ ComandKey, ShiftKey ] modifiers) MoveCaretToTheEndWithSelection
                 ]
 
         End ->
